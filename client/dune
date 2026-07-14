@@ -1,0 +1,8 @@
+(executable
+ (name client)
+ (modes js)
+ (js_of_ocaml
+  (flags (:standard --effects=cps)))
+ (libraries quickdraw_shared js_of_ocaml)
+ (preprocess
+  (pps js_of_ocaml-ppx)))

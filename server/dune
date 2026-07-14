@@ -1,0 +1,13 @@
+(executable
+ (name server)
+ (libraries
+  quickdraw_shared
+  core
+  async
+  core_unix
+  core_unix.command_unix
+  cohttp-async
+  cohttp_async_websocket
+  async_websocket)
+ (preprocess
+  (pps ppx_jane)))
