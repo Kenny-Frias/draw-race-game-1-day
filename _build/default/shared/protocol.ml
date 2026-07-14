@@ -10,7 +10,7 @@ open Sexplib0.Sexp_conv
 let cell_px = 8
 let grid_cols = 640 / cell_px (* 80 *)
 let grid_rows = 480 / cell_px (* 60 *)
-let max_players = 15
+let max_players = 16
 let min_players = 2
 
 (* round length is host-adjustable in the lobby *)

@@ -898,7 +898,7 @@ let () =
     match
       Js.Opt.to_option
         (Dom_html.window##prompt
-           (Js.string "QUICKDRAW - what's your name, drawer?")
+           (Js.string "Pick a Name")
            (Js.string ""))
     with
     | Some s ->

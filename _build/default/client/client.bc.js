@@ -3429,14 +3429,14 @@ j=h+1|0;if(79!==h)return _(n,j);var
 e=g+1|0;return 59!==g?_(m,e):w(aj,0,0,i,b,c,d,v,f)}return l!==a0?F(jp,i+h*j,b+g*k,j+eu,k+eu,l,o):o(0)}return n(0)}return m(0)})}var
 jT=362,cN=-57574468,jR="QUICKDRAW",kD=726,jP=520,jO=532,lb=" (you)",km=300,cj=400,mN=e("List.nth"),uM=[1,1],uK=[1,0],uz=[0,ax],uA=[0,1],uB=[0,20],ui=e(lb),uq=e(z),uj=[0,[12,80,[4,0,0,0,[12,32,[2,0,[2,0,0]]]]],e("P%d %s%s")],uk=e("HOST \xc2\xb7 READY"),un=e("READY"),uo=e("HOST \xc2\xb7 JOINING"),up=e("JOINING\xe2\x80\xa6"),ul=[0,1],um=[0,1],ur=[0,[12,80,[4,0,0,0,[11,e(" \xe2\x80\x94 open slot \xe2\x80\x94"),0]]],e("P%d \xe2\x80\x94 open slot \xe2\x80\x94")],uc=e(jR),ud=e(jR),ue=[0,[11,e("draw fast \xc2\xb7 vote hard \xc2\xb7 "),[4,0,0,0,[11,e("\xe2\x80\x93"),[4,0,0,0,[11,e(" players"),0]]]]],e("draw fast \xc2\xb7 vote hard \xc2\xb7 %d\xe2\x80\x93%d players")],uf=[0,1],ug=[0,18],uh=[0,2],us=e("server:"),ut=[0,17],uu=[0,17],uv=[0,17],uw=e("round time"),ux=[0,cN],uy=[0,16],uC=e("\xe2\x88\x92"),uD=[0,ax],uE=[0,1],uF=[0,18],uG=e(cl),uO=[0,[11,e("round time \xc2\xb7 "),[2,0,0]],e("round time \xc2\xb7 %s")],uP=[0,16],uQ=[0,16],uH=e("START ROUND"),uI=e("host only \xc2\xb7 needs 2+ ready"),uJ=[0,16],uL=e("UNREADY"),uN=e("READY UP"),jj=90,dg=[0,jj];function
 ub(a,p){return bq(jy,56,aZ,7.,49,41,uc,function(a){var
-e=44;return bq(jy,56,aE,7.,e,36,ud,function(a){return q(M,ue,function(a){return aS(a,2,15,function(a){return w(H,ug,uf,[0,bm],0,e,kp,a,function(a){var
+e=44;return bq(jy,56,aE,7.,e,36,ud,function(a){return q(M,ue,function(a){return aS(a,2,16,function(a){return w(H,ug,uf,[0,bm],0,e,kp,a,function(a){var
 b=cO,c=712,d=288;return F(ae,e,b,c,d,aO,function(a){return w(aj,0,0,e,b,c,d,v,function(a){L.globalAlpha=0.25;return bq(d_,uh,cj,148,cj,420,Z,function(a){L.globalAlpha=1.;function
 c(a){var
 f=ea[1];if(0>a)return $(mN);var
 b=f,c=a;for(;;){if(!b)return 0;var
 d=b[2],e=b[1];if(0===c)return[0,e];b=d;c=c-1|0}}var
 i=c(0),g=[0,c(1),R];a:{b:{var
-f=g,d=1,b=2;for(;;){if(14<b)break b;if(b===14)break;var
+f=g,d=1,b=2;for(;;){if(15<b)break b;if(b===15)break;var
 j=c(b),h=[0,c(b+1|0),R];f[d+1]=[0,j,h];f=h;d=1;b=b+2|0}f[d+1]=[0,c(b),0];break a}f[d+1]=0}function
 k(g,b){if(!b){var
 i=448;return w(H,ut,0,0,0,e,i,us,function(a){var
@@ -3596,7 +3596,7 @@ e=ge(a);if(e){var
 f=e[1],g=dj(f[1],f[2]);if(g){var
 c=g[1],h=bY[1];if(h)jx(h[1],c,function(a,b){return cJ(a,b)});else
 cJ(c[1],c[2]);bY[1]=[0,c]}}}return b(bn)}),f5);f6(bJ,"touchend",bo(function(a,b){cG[1]=0;cH[1]=0;bY[1]=0;return b(bn)}),f5);var
-jC=jn(az.prompt("QUICKDRAW - what's your name, drawer?",z)),ke="anon";if(jC)var
+jC=jn(az.prompt("Pick a Name",z)),ke="anon";if(jC)var
 jD=mE(ag(jC[1])),jE=bP(jD,e(z))?e(ke):jD;else
 var
 jE=e(ke);var
