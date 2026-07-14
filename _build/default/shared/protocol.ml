@@ -10,9 +10,14 @@ open Sexplib0.Sexp_conv
 let cell_px = 8
 let grid_cols = 640 / cell_px (* 80 *)
 let grid_rows = 480 / cell_px (* 60 *)
-let max_players = 8
+let max_players = 15
 let min_players = 2
-let round_seconds = 90
+
+(* round length is host-adjustable in the lobby *)
+let round_seconds = 90 (* default *)
+let min_round_seconds = 30
+let max_round_seconds = 300
+let round_time_step = 15
 let countdown_seconds = 3
 
 (* star-rating vote: each player gives every other drawing 1..max_stars,
@@ -65,6 +70,7 @@ type score_line =
 type client_msg =
   | Join of string (* requested name *)
   | Set_ready of bool
+  | Set_round_time of int (* host only, seconds *)
   | Start_round (* host only *)
   | Submit of grid * int (* grid, seconds left at submit *)
   | Rate of (int * int) list (* (player_id, stars 1..5) for each opponent *)
@@ -76,9 +82,10 @@ type client_msg =
 type server_msg =
   | Joined of int (* your player id *)
   | Join_refused of string
-  | Lobby of player list (* roster update; not a screen change *)
+  | Lobby of player list * int (* roster + round seconds; not a screen change *)
   | Go_lobby (* host sent everyone back to the lobby screen *)
-  | Word_reveal of string * float (* word, draw deadline (unix epoch, after countdown) *)
+  | Word_reveal of string * float * int
+    (* word, draw deadline (unix epoch, after countdown), round seconds *)
   | Drawing_over (* timer hit zero: force submit *)
   | Vote_now of string * submission list (* word, everyone's drawings *)
   | Results of score_line list

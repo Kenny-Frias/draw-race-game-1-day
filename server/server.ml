@@ -37,6 +37,7 @@ type phase =
   | Drawing of
       { word : string
       ; deadline : float
+      ; secs : int (* this round's length *)
       ; participants : int list
       ; mutable subs : P.submission list
       ; mutable over_sent : bool
@@ -53,6 +54,7 @@ let clients : client list ref = ref []
 let phase : phase ref = ref Lobby
 let next_id = ref 1
 let round_token = ref 0
+let round_secs = ref P.round_seconds (* host-adjustable in the lobby *)
 
 let send_to (c : client) (m : P.server_msg) =
   Pipe.write_without_pushback_if_open c.send (P.string_of_server_msg m)
@@ -70,7 +72,7 @@ let send_to_ids ids (m : P.server_msg) =
     then Pipe.write_without_pushback_if_open c.send s)
 
 let roster () = List.map !clients ~f:(fun c -> c.player)
-let broadcast_lobby () = broadcast (Lobby (roster ()))
+let broadcast_lobby () = broadcast (Lobby (roster (), !round_secs))
 
 let find_client id = List.find !clients ~f:(fun c -> c.player.id = id)
 
@@ -97,7 +99,7 @@ let compute_scores (subs : P.submission list)
           Option.value v ~default:0 + (stars * P.star_points)))));
   List.map subs ~f:(fun (s : P.submission) ->
     let votes = Option.value (Hashtbl.find vote_points s.player_id) ~default:0 in
-    let speed = Int.max 0 (Int.min s.seconds_left P.round_seconds) in
+    let speed = Int.max 0 (Int.min s.seconds_left P.max_round_seconds) in
     { P.s_player_id = s.player_id
     ; s_name = s.player_name
     ; votes
@@ -166,12 +168,12 @@ let start_round () =
     incr round_token;
     let token = !round_token in
     let word = words.(Random.int (Array.length words)) in
-    let deadline =
-      now () +. Float.of_int (P.countdown_seconds + P.round_seconds)
-    in
+    let secs = !round_secs in
+    let deadline = now () +. Float.of_int (P.countdown_seconds + secs) in
     let participants = List.map ready ~f:(fun c -> c.player.id) in
-    phase := Drawing { word; deadline; participants; subs = []; over_sent = false };
-    send_to_ids participants (Word_reveal (word, deadline));
+    phase
+    := Drawing { word; deadline; secs; participants; subs = []; over_sent = false };
+    send_to_ids participants (Word_reveal (word, deadline, secs));
     (* at the deadline, tell laggards to force-submit; 3s grace, then move on *)
     upon
       (Clock.at (Time_float.of_span_since_epoch (Time_float.Span.of_sec deadline)))
@@ -194,6 +196,13 @@ let handle_msg (c : client) (msg : P.client_msg) =
   | Set_ready r ->
     c.player <- { c.player with conn = (if r then P.Ready else P.Connecting) };
     broadcast_lobby ()
+  | Set_round_time secs ->
+    (match !phase with
+     | Lobby when c.player.is_host ->
+       round_secs
+       := Int.max P.min_round_seconds (Int.min P.max_round_seconds secs);
+       broadcast_lobby ()
+     | _ -> ())
   | Start_round | Next_round ->
     (match !phase with
      | (Lobby | Results _) when c.player.is_host -> start_round ()
@@ -216,7 +225,7 @@ let handle_msg (c : client) (msg : P.client_msg) =
           @ [ { P.player_id = c.player.id
               ; player_name = c.player.name
               ; grid
-              ; seconds_left
+              ; seconds_left = Int.max 0 (Int.min seconds_left d.secs)
               }
             ];
        check_drawing_done ()

@@ -3,8 +3,8 @@ JSIP 1 Day Project
 
 # QUICKDRAW — multiplayer drawing game
 
-2–8 players get the same random word, draw it on an 80×60 pixel grid against a
-shared 90-second timer (no live view of opponents), then rate each other's
+2–15 players get the same random word, draw it on an 80×60 pixel grid against
+a shared timer (host picks the round length in the lobby, 0:30–5:00) (no live view of opponents), then rate each other's
 drawings 1–5 stars. Score = aggregated star points (10 per star) + speed bonus
 (seconds left when you submitted).
 

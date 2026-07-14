@@ -27,17 +27,23 @@ let play ~uri ~name ~is_starter ~n_bots =
                   printf "[%s] joined as #%d\n%!" name id;
                   my_id := id
                 | Join_refused why -> printf "[%s] REFUSED: %s\n%!" name why
-                | Lobby ps ->
+                | Lobby (ps, secs) ->
                   let ready =
                     List.count ps ~f:(fun p ->
                       match p.conn with P.Ready -> true | _ -> false)
                   in
-                  printf "[%s] lobby: %d players, %d ready\n%!" name
-                    (List.length ps) ready;
-                  if is_starter && ready >= n_bots then send Start_round
-                | Word_reveal (w, dl) ->
-                  printf "[%s] word=%s deadline in %.1fs\n%!" name w
-                    (dl -. Core_unix.gettimeofday ());
+                  printf "[%s] lobby: %d players, %d ready, round=%ds\n%!" name
+                    (List.length ps) ready secs;
+                  if is_starter && ready >= n_bots
+                  then (
+                    (* exercise the host round-time control: 90 -> 120s *)
+                    if secs = P.round_seconds
+                    then send (Set_round_time 120)
+                    else if secs = 120 then send Start_round)
+                | Word_reveal (w, dl, secs) ->
+                  printf "[%s] word=%s deadline in %.1fs (round %ds)\n%!" name w
+                    (dl -. Core_unix.gettimeofday ())
+                    secs;
                   (* draw something: a few colored cells, then submit early *)
                   let g = P.empty_grid () in
                   Array.iteri g ~f:(fun i _ ->

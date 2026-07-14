@@ -37,6 +37,11 @@ type screen =
 let screen = ref Connecting
 let players : P.player list ref = ref []
 let my_id = ref (-1)
+
+(* round length: the lobby setting (live, host-adjustable) and the value
+   locked in for the round in progress *)
+let lobby_round_secs = ref P.round_seconds
+let cur_round_secs = ref P.round_seconds
 let grid = ref (P.empty_grid ())
 let undo : P.color array list ref = ref []
 
@@ -87,13 +92,16 @@ let handle_server_msg (m : P.server_msg) =
     my_id := id;
     screen := Lobby_screen
   | Join_refused why -> screen := Dead why
-  | Lobby ps -> players := ps
+  | Lobby (ps, secs) ->
+    players := ps;
+    lobby_round_secs := secs
   | Go_lobby -> screen := Lobby_screen
-  | Word_reveal (word, deadline) ->
+  | Word_reveal (word, deadline, secs) ->
     grid := P.empty_grid ();
     undo := [];
     tool := Pen;
     sel_color := 0;
+    cur_round_secs := secs;
     screen := Reveal (word, deadline)
   | Drawing_over ->
     (match !screen with
@@ -284,44 +292,63 @@ let render_lobby () =
   Draw.text ~size:18 ~bold:true ~color:T.accent2 ~x:px ~y:104
     (Printf.sprintf "draw fast · vote hard · %d–%d players" P.min_players
        P.max_players);
-  (* player list box *)
+  (* player list box: one column up to 8 slots, two columns beyond *)
   let bx = px
   and by = 140
-  and bw = T.win_w - (2 * px)
-  and bh = (P.max_players * 33) + 24 in
+  and bw = T.win_w - (2 * px) in
+  let two_col = P.max_players > 8 in
+  let rows_per_col =
+    if two_col then (P.max_players + 1) / 2 else P.max_players
+  in
+  let bh = (rows_per_col * 33) + 24 in
+  let name_size = if two_col then 15 else 19
+  and tag_size = if two_col then 11 else 14 in
   Draw.fill_rect ~x:bx ~y:by ~w:bw ~h:bh P.white;
   Draw.draw_border ~x:bx ~y:by ~w:bw ~h:bh ();
+  if two_col
+  then (
+    Draw.set_alpha 0.25;
+    Draw.line ~lw:2 ~x1:(bx + (bw / 2)) ~y1:(by + 8) ~x2:(bx + (bw / 2))
+      ~y2:(by + bh - 8) T.muted;
+    Draw.set_alpha 1.0);
+  let colw = if two_col then (bw - 12) / 2 else bw in
   List.iteri
     (fun i slot ->
-      let ry = by + 14 + (i * 33) in
+      let cx0 = bx + if two_col && i >= rows_per_col then colw + 12 else 0 in
+      let ri = if two_col then i mod rows_per_col else i in
+      let ry = by + 14 + (ri * 33) in
       match slot with
       | Some (p : P.player) ->
         let is_ready = match p.conn with P.Ready -> true | _ -> false in
         let sq = if is_ready then T.accent2 else T.accent in
-        Draw.fill_rect ~x:(bx + 18) ~y:(ry + 4) ~w:16 ~h:16 sq;
-        Draw.draw_border ~x:(bx + 18) ~y:(ry + 4) ~w:16 ~h:16 ();
+        Draw.fill_rect ~x:(cx0 + 18) ~y:(ry + 4) ~w:16 ~h:16 sq;
+        Draw.draw_border ~x:(cx0 + 18) ~y:(ry + 4) ~w:16 ~h:16 ();
         let label =
           Printf.sprintf "P%d %s%s" (i + 1) p.name
             (if p.id = !my_id then " (you)" else "")
         in
-        Draw.text ~size:19 ~x:(bx + 46) ~y:(ry + 2) label;
+        Draw.text ~size:name_size ~x:(cx0 + 46) ~y:(ry + 4) label;
         let tag =
           if is_ready then (if p.is_host then "HOST · READY" else "READY")
           else if p.is_host then "HOST · JOINING"
           else "JOINING…"
         in
         let tc = if is_ready then T.ink else T.accent in
-        let tw = int_of_float (Draw.text_width ~size:14 ~bold:true tag) + 16 in
-        let tx = bx + bw - 18 - tw in
+        let tw =
+          int_of_float (Draw.text_width ~size:tag_size ~bold:true tag) + 14
+        in
+        let tx = cx0 + colw - 16 - tw in
         Draw.draw_border ~color:tc ~x:tx ~y:ry ~w:tw ~h:24 ();
-        Draw.text ~size:14 ~bold:true ~color:tc ~x:(tx + 8) ~y:(ry + 5) tag
+        Draw.text ~size:tag_size ~bold:true ~color:tc ~x:(tx + 7) ~y:(ry + 6)
+          tag
       | None ->
-        Draw.fill_rect ~x:(bx + 18) ~y:(ry + 4) ~w:16 ~h:16 T.disabled;
-        Draw.draw_border ~color:T.muted ~x:(bx + 18) ~y:(ry + 4) ~w:16 ~h:16 ();
-        Draw.text ~size:19 ~color:T.muted ~x:(bx + 46) ~y:(ry + 2)
+        Draw.fill_rect ~x:(cx0 + 18) ~y:(ry + 4) ~w:16 ~h:16 T.disabled;
+        Draw.draw_border ~color:T.muted ~x:(cx0 + 18) ~y:(ry + 4) ~w:16 ~h:16
+          ();
+        Draw.text ~size:name_size ~color:T.muted ~x:(cx0 + 46) ~y:(ry + 4)
           (Printf.sprintf "P%d — open slot —" (i + 1)))
     (List.init P.max_players (fun i -> List.nth_opt !players i));
-  (* server address *)
+  (* server address (left) · round time (right, host can adjust) *)
   let sy = by + bh + 14 in
   Draw.text ~size:17 ~x:px ~y:(sy + 6) "server:";
   let host = Js.to_string Dom_html.window##.location##.host in
@@ -329,6 +356,42 @@ let render_lobby () =
   Draw.fill_rect ~x:(px + 78) ~y:sy ~w:hw ~h:30 P.white;
   Draw.draw_border ~x:(px + 78) ~y:sy ~w:hw ~h:30 ();
   Draw.text ~size:17 ~x:(px + 90) ~y:(sy + 6) host;
+  let tlabel = fmt_clock !lobby_round_secs in
+  if i_am_host ()
+  then (
+    (* [-] 1:30 [+] stepper *)
+    let step_w = 30
+    and time_w = 70 in
+    let x0 = T.win_w - px - ((2 * step_w) + time_w + 12) in
+    Draw.text ~size:16 ~color:T.muted ~align:`Right ~x:(x0 - 12) ~y:(sy + 7)
+      "round time";
+    let stepper ~x ~label ~enabled ~delta =
+      Draw.fill_rect ~x ~y:sy ~w:step_w ~h:30 P.white;
+      Draw.draw_border ~x ~y:sy ~w:step_w ~h:30 ();
+      Draw.text ~size:20 ~bold:true
+        ~color:(if enabled then T.ink else T.disabled)
+        ~align:`Center ~x:(x + (step_w / 2)) ~y:(sy + 4) label;
+      if enabled
+      then
+        add_hit ~x ~y:sy ~w:step_w ~h:30 (fun () ->
+          send (Set_round_time (!lobby_round_secs + delta)))
+    in
+    stepper ~x:x0 ~label:"−"
+      ~enabled:(!lobby_round_secs > P.min_round_seconds)
+      ~delta:(-P.round_time_step);
+    Draw.fill_rect ~x:(x0 + step_w + 6) ~y:sy ~w:time_w ~h:30 P.white;
+    Draw.draw_border ~x:(x0 + step_w + 6) ~y:sy ~w:time_w ~h:30 ();
+    Draw.text ~size:18 ~bold:true ~align:`Center
+      ~x:(x0 + step_w + 6 + (time_w / 2)) ~y:(sy + 5) tlabel;
+    stepper ~x:(x0 + step_w + time_w + 12) ~label:"+"
+      ~enabled:(!lobby_round_secs < P.max_round_seconds)
+      ~delta:P.round_time_step)
+  else (
+    let s = Printf.sprintf "round time · %s" tlabel in
+    let sw = int_of_float (Draw.text_width ~size:16 s) + 20 in
+    let x0 = T.win_w - px - sw in
+    Draw.draw_border ~color:T.muted ~x:x0 ~y:sy ~w:sw ~h:30 ();
+    Draw.text ~size:16 ~color:T.muted ~x:(x0 + 10) ~y:(sy + 6) s);
   (* actions *)
   let byy = T.win_h - 80 in
   let can_start = i_am_host () && ready_count () >= P.min_players in
@@ -496,20 +559,22 @@ let render_waiting () =
     "waiting for the other players...";
   draw_grid_thumb ~x:(cx - 160) ~y:220 ~w:320 ~h:240 !grid
 
-(* star row overlaid on the bottom of a voting card *)
+(* star row overlaid on the bottom of a voting card; spacing shrinks with
+   the card so it works at any player count *)
 let star_band ~x ~y ~card_w ~rating ~clickable ~on_rate =
   let band_h = 26 in
   Draw.fill_rect ~x ~y ~w:card_w ~h:band_h P.white;
   Draw.draw_border ~x ~y ~w:card_w ~h:band_h ();
   let cy = y + (band_h / 2) in
-  let spacing = 24 in
+  let spacing = min 24 ((card_w - 10) / P.max_stars) in
+  let r = max 5 (spacing * 10 / 24) in
   for s = 1 to P.max_stars do
     let cx = x + (card_w / 2) + ((s - 3) * spacing) in
     if s <= rating
     then (
-      Draw.fill_star ~cx ~cy ~r:10 T.yellow;
-      Draw.stroke_star ~lw:2 ~cx ~cy ~r:10 T.ink)
-    else Draw.stroke_star ~lw:2 ~cx ~cy ~r:10 T.muted;
+      Draw.fill_star ~cx ~cy ~r T.yellow;
+      Draw.stroke_star ~lw:2 ~cx ~cy ~r T.ink)
+    else Draw.stroke_star ~lw:2 ~cx ~cy ~r T.muted;
     if clickable
     then
       add_hit ~x:(cx - (spacing / 2)) ~y ~w:spacing ~h:band_h (fun () ->
@@ -523,14 +588,21 @@ let render_voting (v : vote_state) =
   Draw.text ~size:16 ~color:T.muted ~align:`Right ~x:(T.win_w - px) ~y:32
     "give each drawing 1–5 stars";
   let n = List.length v.v_subs in
-  let cols = if n <= 4 then n else (n + 1) / 2 in
-  let card_w = min 170 ((T.win_w - (2 * px) - ((cols - 1) * 24)) / cols) in
-  let card_h = card_w * 3 / 4 in
+  let cols =
+    if n <= 4 then n else if n <= 8 then (n + 1) / 2 else (n + 2) / 3
+  in
   let rows = (n + cols - 1) / cols in
+  (* card size limited by both width and the ~424px of vertical space *)
+  let card_w =
+    min
+      (min 170 ((T.win_w - (2 * px) - ((cols - 1) * 24)) / cols))
+      (((424 / rows) - 46) * 4 / 3)
+  in
+  let card_h = card_w * 3 / 4 in
   let total_w = (cols * card_w) + ((cols - 1) * 24) in
   let x0 = (T.win_w - total_w) / 2 in
   let row_h = card_h + 46 in
-  let y0 = 90 + ((330 - (rows * row_h)) / 2) in
+  let y0 = max 92 (90 + ((424 - (rows * row_h)) / 2)) in
   List.iteri
     (fun i (s : P.submission) ->
       let x = x0 + (i mod cols * (card_w + 24))
@@ -557,7 +629,7 @@ let render_voting (v : vote_state) =
                :: List.filter (fun (p, _) -> p <> s.player_id) v.v_stars));
       Draw.text ~size:16 ~align:`Center ~x:(x + (card_w / 2)) ~y:(y + card_h + 8)
         (Printf.sprintf "%s · %s" s.player_name
-           (fmt_clock (P.round_seconds - s.seconds_left))))
+           (fmt_clock (!cur_round_secs - s.seconds_left))))
     v.v_subs;
   (* bottom: lock in once every drawing is rated *)
   let n_opp = n - 1 in
@@ -583,25 +655,36 @@ let render_results (lines : P.score_line list) =
     "ROUND RESULTS";
   Draw.text ~size:30 ~bold:true ~x:px ~y:30 "ROUND RESULTS";
   let bw = T.win_w - (2 * px) in
+  (* rows compress to fit many players in the fixed window *)
+  let n = List.length lines in
+  let rh = if n <= 7 then 48 else max 24 (385 / n) in
+  let box_h = rh - (if n <= 7 then 8 else 4) in
+  let compact = rh < 40 in
+  let sz_rank = if compact then 14 else 24
+  and sz_name = if compact then 13 else 18
+  and sz_detail = if compact then 12 else 16
+  and sz_total = if compact then 14 else 22 in
+  let ty extra = if compact then (box_h - 14) / 2 else extra in
   List.iteri
     (fun i (l : P.score_line) ->
-      let y = 95 + (i * 48) in
+      let y = 95 + (i * rh) in
       if i = 0
-      then Draw.shadow_box ~off:4 ~shadow:T.accent ~x:px ~y ~w:bw ~h:40
+      then Draw.shadow_box ~off:4 ~shadow:T.accent ~x:px ~y ~w:bw ~h:box_h
              ~fill:P.white ()
       else (
-        Draw.fill_rect ~x:px ~y ~w:bw ~h:40 P.white;
-        Draw.draw_border ~x:px ~y ~w:bw ~h:40 ());
-      Draw.text ~size:24 ~bold:true
+        Draw.fill_rect ~x:px ~y ~w:bw ~h:box_h P.white;
+        Draw.draw_border ~x:px ~y ~w:bw ~h:box_h ());
+      Draw.text ~size:sz_rank ~bold:true
         ~color:(if i = 0 then T.accent else T.ink)
-        ~x:(px + 14) ~y:(y + 8)
+        ~x:(px + 14) ~y:(y + ty 8)
         (Printf.sprintf "#%d" (i + 1));
-      Draw.text ~size:18 ~bold:true ~x:(px + 74) ~y:(y + 11)
+      Draw.text ~size:sz_name ~bold:true ~x:(px + 74) ~y:(y + ty 11)
         (l.s_name ^ (if l.s_player_id = !my_id then " (you)" else ""));
-      Draw.text ~size:16 ~color:T.muted ~align:`Right ~x:(px + bw - 110)
-        ~y:(y + 12)
+      Draw.text ~size:sz_detail ~color:T.muted ~align:`Right ~x:(px + bw - 110)
+        ~y:(y + ty 12)
         (Printf.sprintf "stars %d + speed %d" l.votes l.speed);
-      Draw.text ~size:22 ~bold:true ~align:`Right ~x:(px + bw - 16) ~y:(y + 9)
+      Draw.text ~size:sz_total ~bold:true ~align:`Right ~x:(px + bw - 16)
+        ~y:(y + ty 9)
         (string_of_int l.total))
     lines;
   let by = T.win_h - 80 in
@@ -632,7 +715,7 @@ let render () =
   Draw.clear ();
   (* reveal -> drawing transition is time-driven, synced by the deadline *)
   (match !screen with
-   | Reveal (w, d) when now_s () >= d -. float_of_int P.round_seconds ->
+   | Reveal (w, d) when now_s () >= d -. float_of_int !cur_round_secs ->
      screen := Drawing (w, d)
    | Drawing (_, d) when now_s () > d +. 1.5 ->
      (* belt-and-braces: if Drawing_over got lost, self-submit *)
