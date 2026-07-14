@@ -32,6 +32,18 @@ type client =
   ; send : string Pipe.Writer.t
   }
 
+(* sabotage: the first player to submit earns a one-shot color lock *)
+type lock_state =
+  | Lock_unearned
+  | Lock_offered of int (* player id who may lock *)
+  | Lock_done
+
+(* points earned mid-round; carried into Voting so scoring can see them *)
+type awards =
+  { jackpot_winner : int option (* pid who painted the jackpot cell *)
+  ; bonus_won : (int * int) list (* pid -> accumulated bonus-color points *)
+  }
+
 type phase =
   | Lobby
   | Drawing of
@@ -40,12 +52,21 @@ type phase =
       ; participants : int list
       ; mutable subs : P.submission list
       ; mutable over_sent : bool
+      ; mutable lock : lock_state
+      ; jackpot_cell : int (* flat grid index, secret until hit *)
+      ; cursed_cell : int
+      ; mutable jackpot_winner : int option
+      ; mutable cursed_hit : int option (* pid who earned the wipe *)
+      ; mutable curse_used : bool
+      ; mutable bonus : (P.color * float) option (* active color, expiry *)
+      ; mutable bonus_won : (int * int) list
       }
   | Voting of
       { word : string
       ; participants : int list
       ; subs : P.submission list
       ; mutable ballots : (int * (int * int) list) list (* voter_id, ranks *)
+      ; awards : awards
       }
   | Results of P.score_line list
 
@@ -84,7 +105,8 @@ let reassign_host () =
 (* ---------- Scoring ---------- *)
 
 let compute_scores (subs : P.submission list)
-      (ballots : (int * (int * int) list) list) : P.score_line list =
+      (ballots : (int * (int * int) list) list) (awards : awards)
+  : P.score_line list =
   let m = List.length subs in
   let vote_points = Hashtbl.create (module Int) in
   List.iter ballots ~f:(fun (_voter, ranks) ->
@@ -96,31 +118,44 @@ let compute_scores (subs : P.submission list)
   List.map subs ~f:(fun (s : P.submission) ->
     let votes = Option.value (Hashtbl.find vote_points s.player_id) ~default:0 in
     let speed = Int.max 0 (Int.min s.seconds_left P.round_seconds) in
+    let egg =
+      match awards.jackpot_winner with
+      | Some w when w = s.player_id -> P.egg_points
+      | _ -> 0
+    in
+    let bonus =
+      Option.value
+        (List.Assoc.find awards.bonus_won s.player_id ~equal:Int.equal)
+        ~default:0
+    in
     { P.s_player_id = s.player_id
     ; s_name = s.player_name
     ; votes
     ; speed
-    ; total = votes + speed
+    ; egg
+    ; bonus
+    ; total = votes + speed + egg + bonus
     })
   |> List.sort ~compare:(fun a b -> Int.compare b.P.total a.P.total)
 
 (* ---------- Phase transitions ---------- *)
 
-let to_results participants (word : string) subs ballots =
+let to_results participants (word : string) subs ballots awards =
   ignore word;
-  let scores = compute_scores subs ballots in
+  let scores = compute_scores subs ballots awards in
   phase := Results scores;
   send_to_ids participants (Results scores)
 
 let to_voting () =
   match !phase with
-  | Drawing { word; subs; participants; _ } ->
+  | Drawing { word; subs; participants; jackpot_winner; bonus_won; _ } ->
+    let awards = { jackpot_winner; bonus_won } in
     (match subs with
      | [] | [ _ ] ->
        (* not enough drawings survived; bail to results with what we have *)
-       to_results participants word subs []
+       to_results participants word subs [] awards
      | _ ->
-       phase := Voting { word; participants; subs; ballots = [] };
+       phase := Voting { word; participants; subs; ballots = []; awards };
        send_to_ids participants (Vote_now (word, subs));
        (* a zombie connection must not hang the round: settle with whatever
           ballots arrived after a generous window *)
@@ -128,20 +163,20 @@ let to_voting () =
        upon (Clock.after (Time_float.Span.of_sec 75.)) (fun () ->
          match !phase with
          | Voting v when !round_token = token ->
-           to_results v.participants v.word v.subs v.ballots
+           to_results v.participants v.word v.subs v.ballots v.awards
          | _ -> ()))
   | _ -> ()
 
 let check_voting_done () =
   match !phase with
-  | Voting { word; participants; subs; ballots } ->
+  | Voting { word; participants; subs; ballots; awards } ->
     (* every submitter who is still connected must have voted *)
     let expected =
       List.filter subs ~f:(fun s -> Option.is_some (find_client s.player_id))
     in
     let voted id = List.exists ballots ~f:(fun (v, _) -> v = id) in
     if List.for_all expected ~f:(fun s -> voted s.P.player_id)
-    then to_results participants word subs ballots
+    then to_results participants word subs ballots awards
   | _ -> ()
 
 let check_drawing_done () =
@@ -168,8 +203,55 @@ let start_round () =
       now () +. Float.of_int (P.countdown_seconds + P.round_seconds)
     in
     let participants = List.map ready ~f:(fun c -> c.player.id) in
-    phase := Drawing { word; deadline; participants; subs = []; over_sent = false };
+    (* two distinct hidden cells: the jackpot and the curse *)
+    let n_cells = P.grid_cols * P.grid_rows in
+    let jackpot_cell = Random.int n_cells in
+    let cursed_cell =
+      let c = ref (Random.int n_cells) in
+      while !c = jackpot_cell do
+        c := Random.int n_cells
+      done;
+      !c
+    in
+    phase
+    := Drawing
+         { word
+         ; deadline
+         ; participants
+         ; subs = []
+         ; over_sent = false
+         ; lock = Lock_unearned
+         ; jackpot_cell
+         ; cursed_cell
+         ; jackpot_winner = None
+         ; cursed_hit = None
+         ; curse_used = false
+         ; bonus = None
+         ; bonus_won = []
+         };
     send_to_ids participants (Word_reveal (word, deadline));
+    send_to_ids participants (Secret_cells (jackpot_cell, cursed_cell));
+    (* a fresh bonus color every bonus_period_s while the round runs; skip
+       spawns too close to the deadline for anyone to react *)
+    let bonus_colors =
+      Array.filter P.Tokens.palette ~f:(fun c -> c <> P.white)
+    in
+    let rec spawn_bonus () =
+      upon
+        (Clock.after (Time_float.Span.of_sec (Float.of_int P.bonus_period_s)))
+        (fun () ->
+          match !phase with
+          | Drawing d when !round_token = token ->
+            if Float.(now () < d.deadline -. 10.)
+            then (
+              let c = bonus_colors.(Random.int (Array.length bonus_colors)) in
+              let expires = now () +. Float.of_int P.bonus_period_s in
+              d.bonus <- Some (c, expires);
+              send_to_ids d.participants (Bonus_color (c, expires));
+              spawn_bonus ())
+          | _ -> ())
+    in
+    spawn_bonus ();
     (* at the deadline, tell laggards to force-submit; 3s grace, then move on *)
     upon
       (Clock.at (Time_float.of_span_since_epoch (Time_float.Span.of_sec deadline)))
@@ -183,6 +265,28 @@ let start_round () =
             | Drawing _ when !round_token = token -> to_voting ()
             | _ -> ())
         | _ -> ()))
+
+(* ---------- Sabotage: color lock ---------- *)
+
+(* Authoritative gate for a Lock_color request. The server must not trust the
+   client UI: decide here who may lock, whom, and which colors count.
+   Returns true iff the request should go through. *)
+let lock_request_ok ~(lock : lock_state) ~(participants : int list)
+      ~(subs : P.submission list) ~(locker : int) ~(target_id : int)
+      ~(color : P.color) : bool =
+  (* the offer is the proof: only the offered player may lock, and it flips
+     to Lock_done on success so it can't be spent twice *)
+  (match lock with
+   | Lock_offered id -> id = locker
+   | Lock_unearned | Lock_done -> false)
+  && target_id <> locker
+  && List.mem participants target_id ~equal:Int.equal
+  (* locking a finished player is a wasted shot — reject so the lock isn't
+     burned on someone it can't affect *)
+  && (not (List.exists subs ~f:(fun s -> s.P.player_id = target_id)))
+  (* white is the eraser/background: locking it would be a non-move *)
+  && color <> P.white
+  && Array.mem P.Tokens.palette color ~equal:Int.equal
 
 (* ---------- Per-client message handling ---------- *)
 
@@ -217,7 +321,98 @@ let handle_msg (c : client) (msg : P.client_msg) =
               ; seconds_left
               }
             ];
+       (* first submitter earns the color lock — offer the opponents
+          who are still connected and still drawing *)
+       (match d.lock with
+        | Lock_unearned ->
+          let targets =
+            List.filter_map d.participants ~f:(fun id ->
+              if id = c.player.id
+                 || List.exists d.subs ~f:(fun s -> s.P.player_id = id)
+              then None
+              else
+                Option.map (find_client id) ~f:(fun t -> id, t.player.name))
+          in
+          if not (List.is_empty targets)
+          then (
+            d.lock <- Lock_offered c.player.id;
+            send_to c (Lock_offer targets))
+        | Lock_offered _ | Lock_done -> ());
        check_drawing_done ()
+     | _ -> ())
+  | Lock_color (target_id, color) ->
+    (match !phase with
+     | Drawing d
+       when lock_request_ok ~lock:d.lock ~participants:d.participants
+              ~subs:d.subs ~locker:c.player.id ~target_id ~color ->
+       d.lock <- Lock_done;
+       (match find_client target_id with
+        | Some target -> send_to target (Color_locked (c.player.name, color))
+        | None -> ())
+     | _ -> ())
+  | Hit_secret kind ->
+    (match !phase with
+     | Drawing d
+       when List.mem d.participants c.player.id ~equal:Int.equal
+            && not (List.exists d.subs ~f:(fun s -> s.P.player_id = c.player.id))
+       ->
+       (match kind with
+        | P.Jackpot ->
+          (* first claim wins; announce immediately, pay at results *)
+          if Option.is_none d.jackpot_winner
+          then (
+            d.jackpot_winner <- Some c.player.id;
+            send_to_ids d.participants (Jackpot_hit c.player.name))
+        | P.Cursed ->
+          if Option.is_none d.cursed_hit
+          then (
+            d.cursed_hit <- Some c.player.id;
+            let targets =
+              List.filter_map d.participants ~f:(fun id ->
+                if id = c.player.id
+                   || List.exists d.subs ~f:(fun s -> s.P.player_id = id)
+                then None
+                else
+                  Option.map (find_client id) ~f:(fun t -> id, t.player.name))
+            in
+            if not (List.is_empty targets)
+            then send_to c (Curse_offer targets)))
+     | _ -> ())
+  | Curse_wipe target_id ->
+    (match !phase with
+     | Drawing d
+       when (match d.cursed_hit with
+             | Some pid -> pid = c.player.id
+             | None -> false)
+            && (not d.curse_used)
+            && target_id <> c.player.id
+            && List.mem d.participants target_id ~equal:Int.equal
+            && not (List.exists d.subs ~f:(fun s -> s.P.player_id = target_id))
+       ->
+       d.curse_used <- true;
+       (match find_client target_id with
+        | Some t -> send_to t (Wipe_cells (c.player.name, P.wipe_count))
+        | None -> ())
+     | _ -> ())
+  | Claim_bonus ->
+    (match !phase with
+     | Drawing d
+       when List.mem d.participants c.player.id ~equal:Int.equal
+            && not (List.exists d.subs ~f:(fun s -> s.P.player_id = c.player.id))
+       ->
+       (match d.bonus with
+        | Some (color, expires) when Float.(now () < expires) ->
+          (* first claim takes the window; a new color spawns later *)
+          d.bonus <- None;
+          d.bonus_won
+          <- ( c.player.id
+             , P.bonus_points
+               + Option.value
+                   (List.Assoc.find d.bonus_won c.player.id ~equal:Int.equal)
+                   ~default:0 )
+             :: List.Assoc.remove d.bonus_won c.player.id ~equal:Int.equal;
+          send_to_ids d.participants (Bonus_claimed (c.player.name, color))
+        | _ -> ())
      | _ -> ())
   | Rank ranks ->
     (match !phase with
