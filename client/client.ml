@@ -348,23 +348,18 @@ let render_lobby () =
         Draw.text ~size:name_size ~color:T.muted ~x:(cx0 + 46) ~y:(ry + 4)
           (Printf.sprintf "P%d — open slot —" (i + 1)))
     (List.init P.max_players (fun i -> List.nth_opt !players i));
-  (* server address (left) · round time (right, host can adjust) *)
+  (* round time (host can adjust) *)
   let sy = by + bh + 14 in
-  Draw.text ~size:17 ~x:px ~y:(sy + 6) "server:";
-  let host = Js.to_string Dom_html.window##.location##.host in
-  let hw = int_of_float (Draw.text_width ~size:17 host) + 24 in
-  Draw.fill_rect ~x:(px + 78) ~y:sy ~w:hw ~h:30 P.white;
-  Draw.draw_border ~x:(px + 78) ~y:sy ~w:hw ~h:30 ();
-  Draw.text ~size:17 ~x:(px + 90) ~y:(sy + 6) host;
   let tlabel = fmt_clock !lobby_round_secs in
   if i_am_host ()
   then (
-    (* [-] 1:30 [+] stepper *)
+    (* round time [-] 1:30 [+] stepper *)
     let step_w = 30
     and time_w = 70 in
-    let x0 = T.win_w - px - ((2 * step_w) + time_w + 12) in
-    Draw.text ~size:16 ~color:T.muted ~align:`Right ~x:(x0 - 12) ~y:(sy + 7)
-      "round time";
+    Draw.text ~size:16 ~color:T.muted ~x:px ~y:(sy + 7) "round time";
+    let x0 =
+      px + int_of_float (Draw.text_width ~size:16 "round time") + 14
+    in
     let stepper ~x ~label ~enabled ~delta =
       Draw.fill_rect ~x ~y:sy ~w:step_w ~h:30 P.white;
       Draw.draw_border ~x ~y:sy ~w:step_w ~h:30 ();
@@ -389,9 +384,8 @@ let render_lobby () =
   else (
     let s = Printf.sprintf "round time · %s" tlabel in
     let sw = int_of_float (Draw.text_width ~size:16 s) + 20 in
-    let x0 = T.win_w - px - sw in
-    Draw.draw_border ~color:T.muted ~x:x0 ~y:sy ~w:sw ~h:30 ();
-    Draw.text ~size:16 ~color:T.muted ~x:(x0 + 10) ~y:(sy + 6) s);
+    Draw.draw_border ~color:T.muted ~x:px ~y:sy ~w:sw ~h:30 ();
+    Draw.text ~size:16 ~color:T.muted ~x:(px + 10) ~y:(sy + 6) s);
   (* actions *)
   let byy = T.win_h - 80 in
   let can_start = i_am_host () && ready_count () >= P.min_players in
@@ -419,8 +413,9 @@ let render_reveal word deadline =
   Draw.shadow_box ~off:7 ~shadow:T.accent2 ~x:(cx - (ww / 2)) ~y:200 ~w:ww ~h:90
     ~fill:P.white ();
   Draw.text ~size:50 ~bold:true ~align:`Center ~x:cx ~y:220 wu;
-  (* 3-2-1 countdown: current digit big in accent box, upcoming smaller *)
-  let reveal_left = deadline -. float_of_int P.round_seconds -. now_s () in
+  (* 3-2-1 countdown: current digit big in accent box, upcoming smaller.
+     Drawing starts at deadline - round length, so count down to that. *)
+  let reveal_left = deadline -. float_of_int !cur_round_secs -. now_s () in
   let cur = min P.countdown_seconds (max 1 (int_of_float (ceil reveal_left))) in
   let n_boxes = cur in
   let big = 74
@@ -898,7 +893,7 @@ let () =
     match
       Js.Opt.to_option
         (Dom_html.window##prompt
-           (Js.string "Pick a Name")
+           (Js.string "QUICKDRAW - Pick A Name")
            (Js.string ""))
     with
     | Some s ->
