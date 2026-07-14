@@ -64,6 +64,16 @@ let text_width ?(size = 16) ?(bold = false) s =
   ctx##.font := font ~size ~bold;
   fl (ctx##measureText (Js.string s))##.width
 
+(* largest size <= max_size at which [s] fits in [max_w] px (floor 7);
+   lets text scale with a box whose width doesn't derive from the text *)
+let fit_size ?(bold = false) ~max_size ~max_w s =
+  let rec go size =
+    if size <= 7 then 7
+    else if text_width ~size ~bold s <= float_of_int max_w then size
+    else go (size - 1)
+  in
+  go max_size
+
 (* [y] is the text's top edge (textBaseline=top keeps layout math simple) *)
 let text ?(size = 16) ?(bold = false) ?(color = T.ink) ?(align = `Left) ~x ~y s =
   ctx##.font := font ~size ~bold;

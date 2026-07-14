@@ -450,6 +450,22 @@ let spaced_text ~size ~color ~spacing ~x ~y s =
 
 let string_upper = String.uppercase_ascii
 
+(* font size at which a row of name buttons (32px padding, 12px gaps) fits
+   in [avail] px — victim pickers stay on screen at any player count *)
+let fit_row_size ~avail targets =
+  let rec pick s =
+    let row =
+      List.fold_left
+        (fun a (_, nm) ->
+          a
+          + int_of_float (Draw.text_width ~size:s ~bold:true (string_upper nm))
+          + 32 + 12)
+        (-12) targets
+    in
+    if row <= avail || s <= 9 then s else pick (s - 1)
+  in
+  pick 16
+
 (* scaled-down render of a grid into a box (voting thumbnails, previews) *)
 let draw_grid_thumb ~x ~y ~w ~h (g : P.color array) =
   Draw.fill_rect ~x ~y ~w ~h P.white;
@@ -512,7 +528,6 @@ let render_lobby () =
           Printf.sprintf "P%d %s%s" (i + 1) p.name
             (if p.id = !my_id then " (you)" else "")
         in
-        Draw.text ~size:name_size ~x:(cx0 + 46) ~y:(ry + 4) label;
         let tag =
           if is_ready then (if p.is_host then "HOST · READY" else "READY")
           else if p.is_host then "HOST · JOINING"
@@ -523,6 +538,13 @@ let render_lobby () =
           int_of_float (Draw.text_width ~size:tag_size ~bold:true tag) + 14
         in
         let tx = cx0 + colw - 16 - tw in
+        (* name shrinks to the space left of the status tag *)
+        Draw.text
+          ~size:
+            (Draw.fit_size ~max_size:name_size
+               ~max_w:(max 40 (tx - (cx0 + 46) - 8))
+               label)
+          ~x:(cx0 + 46) ~y:(ry + 4) label;
         Draw.draw_border ~color:tc ~x:tx ~y:ry ~w:tw ~h:24 ();
         Draw.text ~size:tag_size ~bold:true ~color:tc ~x:(tx + 7) ~y:(ry + 6)
           tag
@@ -800,8 +822,10 @@ let render_drawing word deadline =
   | None -> ()
   | Some targets ->
     let cx = T.win_w / 2 in
+    let bsize = fit_row_size ~avail:(T.win_w - 80) targets in
     let bw_of nm =
-      int_of_float (Draw.text_width ~size:16 ~bold:true (string_upper nm)) + 32
+      int_of_float (Draw.text_width ~size:bsize ~bold:true (string_upper nm))
+      + 32
     in
     let row_w =
       List.fold_left (fun a (_, nm) -> a + bw_of nm + 12) (-12) targets
@@ -819,8 +843,10 @@ let render_drawing word deadline =
       (fun (tid, nm) ->
         let wb = bw_of nm in
         Draw.shadow_box ~off:3 ~x:!bx ~y:(y + 74) ~w:wb ~h:34 ~fill:T.accent ();
-        Draw.text ~size:16 ~bold:true ~color:0xFFFFFF ~align:`Center
-          ~x:(!bx + (wb / 2)) ~y:(y + 82) (string_upper nm);
+        Draw.text ~size:bsize ~bold:true ~color:0xFFFFFF ~align:`Center
+          ~x:(!bx + (wb / 2))
+          ~y:(y + 74 + ((34 - bsize) / 2))
+          (string_upper nm);
         add_hit ~x:!bx ~y:(y + 74) ~w:wb ~h:34 (fun () ->
           send (Curse_wipe tid);
           curse_offer := None;
@@ -857,8 +883,10 @@ let render_waiting () =
       "FIRST TO SUBMIT — LOCK A COLOR!";
     Draw.text ~size:15 ~color:T.muted ~align:`Center ~x:cx ~y:506
       "pick a victim:";
+    let bsize = fit_row_size ~avail:(T.win_w - 40) targets in
     let bw_of nm =
-      int_of_float (Draw.text_width ~size:16 ~bold:true (string_upper nm)) + 32
+      int_of_float (Draw.text_width ~size:bsize ~bold:true (string_upper nm))
+      + 32
     in
     let total =
       List.fold_left (fun a (_, nm) -> a + bw_of nm + 12) (-12) targets
@@ -868,15 +896,18 @@ let render_waiting () =
       (fun (tid, nm) ->
         let w = bw_of nm in
         Draw.shadow_box ~off:3 ~x:!x ~y:532 ~w ~h:34 ~fill:P.white ();
-        Draw.text ~size:16 ~bold:true ~align:`Center ~x:(!x + (w / 2)) ~y:540
+        Draw.text ~size:bsize ~bold:true ~align:`Center ~x:(!x + (w / 2))
+          ~y:(532 + ((34 - bsize) / 2))
           (string_upper nm);
         add_hit ~x:!x ~y:532 ~w ~h:34 (fun () ->
           lock_ui := Pick_color (tid, nm));
         x := !x + w + 12)
       targets
   | Pick_color (tid, nm) ->
-    Draw.text ~size:20 ~bold:true ~color:T.accent ~align:`Center ~x:cx ~y:484
-      (Printf.sprintf "LOCK WHICH COLOR ON %s?" (string_upper nm));
+    let title = Printf.sprintf "LOCK WHICH COLOR ON %s?" (string_upper nm) in
+    Draw.text
+      ~size:(Draw.fit_size ~bold:true ~max_size:20 ~max_w:(T.win_w - 40) title)
+      ~bold:true ~color:T.accent ~align:`Center ~x:cx ~y:484 title;
     (* all lockable colors (white is the eraser — not lockable) *)
     let sw = 30
     and gap = 6 in
@@ -967,9 +998,14 @@ let render_voting (v : vote_state) =
             v.v_stars
             <- (s.player_id, stars)
                :: List.filter (fun (p, _) -> p <> s.player_id) v.v_stars));
-      Draw.text ~size:16 ~align:`Center ~x:(x + (card_w / 2)) ~y:(y + card_h + 8)
-        (Printf.sprintf "%s · %s" s.player_name
-           (fmt_clock (!cur_round_secs - s.seconds_left))))
+      let label =
+        Printf.sprintf "%s · %s" s.player_name
+          (fmt_clock (!cur_round_secs - s.seconds_left))
+      in
+      (* caption scales with the card, which shrinks with player count *)
+      Draw.text
+        ~size:(Draw.fit_size ~max_size:16 ~max_w:(card_w + 16) label)
+        ~align:`Center ~x:(x + (card_w / 2)) ~y:(y + card_h + 8) label)
     v.v_subs;
   (* bottom: lock in once every drawing is rated *)
   let n_opp = n - 1 in
@@ -1049,10 +1085,15 @@ let render_results (lines : P.score_line list) =
          (* not spaced_text: it iterates bytes and would shred the ★ *)
          Draw.text ~size:20 ~bold:true ~color:T.accent ~align:`Center
            ~x:(T.win_w / 2) ~y:(cy + 12) "★ W I N N E R ★";
-         Draw.text ~size:40 ~bold:true ~align:`Center ~x:(T.win_w / 2)
-           ~y:(cy + 38)
-           (winner.s_name
-            ^ (if winner.s_player_id = !my_id then " (you)" else ""));
+         let nm =
+           winner.s_name
+           ^ (if winner.s_player_id = !my_id then " (you)" else "")
+         in
+         (* name and itemization scale to the fixed card width *)
+         let nsize = Draw.fit_size ~bold:true ~max_size:40 ~max_w:(cw - 36) nm in
+         Draw.text ~size:nsize ~bold:true ~align:`Center ~x:(T.win_w / 2)
+           ~y:(cy + 38 + ((40 - nsize) / 2))
+           nm;
          let detail =
            String.concat ""
              [ Printf.sprintf "stars %d + speed %d" winner.votes winner.speed
@@ -1065,11 +1106,15 @@ let render_results (lines : P.score_line list) =
              ]
          in
          let total = string_of_int winner.total in
-         let dw = Draw.text_width ~size:18 detail
-         and tw = Draw.text_width ~size:18 ~bold:true total in
+         let dsize =
+           Draw.fit_size ~max_size:18 ~max_w:(cw - 30) (detail ^ total)
+         in
+         let dw = Draw.text_width ~size:dsize detail
+         and tw = Draw.text_width ~size:dsize ~bold:true total in
          let x0 = (T.win_w / 2) - int_of_float ((dw +. tw) /. 2.) in
-         Draw.text ~size:18 ~color:T.muted ~x:x0 ~y:(cy + 84) detail;
-         Draw.text ~size:18 ~bold:true ~x:(x0 + int_of_float dw) ~y:(cy + 84)
+         let dy = cy + 84 + ((18 - dsize) / 2) in
+         Draw.text ~size:dsize ~color:T.muted ~x:x0 ~y:dy detail;
+         Draw.text ~size:dsize ~bold:true ~x:(x0 + int_of_float dw) ~y:dy
            total);
      Draw.set_alpha 1.0
    | _ -> ());
@@ -1079,12 +1124,13 @@ let render_results (lines : P.score_line list) =
   let bw = T.win_w - (2 * px) in
   let rh = if m <= 5 then 48 else min 40 (270 / max 1 m) in
   let box_h = rh - (if m <= 5 then 8 else 3) in
-  let compact = rh < 40 in
-  let sz_rank = if compact then 13 else 24
-  and sz_name = if compact then 12 else 18
-  and sz_detail = if compact then 11 else 16
-  and sz_total = if compact then 13 else 22 in
-  let ty extra = if compact then (box_h - 12) / 2 else extra in
+  (* text scales with the row box (at box_h = 40 these reproduce the old
+     full-size values: 24/18/16/22), and centers vertically at any height *)
+  let sz_rank = max 11 (box_h * 3 / 5)
+  and sz_name = max 10 (box_h * 9 / 20)
+  and sz_detail = max 9 (box_h * 2 / 5)
+  and sz_total = max 11 (box_h * 11 / 20) in
+  let ty sz = (box_h - sz) / 2 in
   let row_delay i = if i = 0 then 3.2 else 3.6 +. (0.15 *. float_of_int (i - 1)) in
   List.iteri
     (fun i (l : P.score_line) ->
@@ -1096,20 +1142,33 @@ let render_results (lines : P.score_line list) =
         Draw.set_alpha p;
         Draw.fill_rect ~x ~y ~w:bw ~h:box_h P.white;
         Draw.draw_border ~x ~y ~w:bw ~h:box_h ();
-        Draw.text ~size:sz_rank ~bold:true ~x:(x + 14) ~y:(y + ty 8)
+        Draw.text ~size:sz_rank ~bold:true ~x:(x + 14) ~y:(y + ty sz_rank)
           (Printf.sprintf "#%d" (i + 2));
-        Draw.text ~size:sz_name ~bold:true ~x:(x + 74) ~y:(y + ty 11)
-          (l.s_name ^ (if l.s_player_id = !my_id then " (you)" else ""));
+        let nm =
+          l.s_name ^ (if l.s_player_id = !my_id then " (you)" else "")
+        in
+        Draw.text ~size:sz_name ~bold:true ~x:(x + 74) ~y:(y + ty sz_name) nm;
+        let detail =
+          String.concat ""
+            [ Printf.sprintf "stars %d + speed %d" l.votes l.speed
+            ; (if l.egg > 0 then Printf.sprintf " + egg %d" l.egg else "")
+            ; (if l.bonus > 0 then Printf.sprintf " + bonus %d" l.bonus
+               else "")
+            ]
+        in
+        (* shrink the itemization so it never collides with the name *)
+        let avail =
+          bw - 110 - 74
+          - int_of_float (Draw.text_width ~size:sz_name ~bold:true nm)
+          - 12
+        in
+        let sz_detail =
+          Draw.fit_size ~max_size:sz_detail ~max_w:(max 40 avail) detail
+        in
         Draw.text ~size:sz_detail ~color:T.muted ~align:`Right
-          ~x:(x + bw - 110) ~y:(y + ty 12)
-          (String.concat ""
-             [ Printf.sprintf "stars %d + speed %d" l.votes l.speed
-             ; (if l.egg > 0 then Printf.sprintf " + egg %d" l.egg else "")
-             ; (if l.bonus > 0 then Printf.sprintf " + bonus %d" l.bonus
-                else "")
-             ]);
+          ~x:(x + bw - 110) ~y:(y + ty sz_detail) detail;
         Draw.text ~size:sz_total ~bold:true ~align:`Right ~x:(x + bw - 16)
-          ~y:(y + ty 9)
+          ~y:(y + ty sz_total)
           (string_of_int l.total);
         Draw.set_alpha 1.0))
     rest;
