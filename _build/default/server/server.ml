@@ -234,6 +234,7 @@ let handle_msg (c : client) (msg : P.client_msg) =
      | _ -> ())
 
 let on_disconnect (c : client) =
+  printf "leave: %s (#%d)\n%!" c.player.name c.player.id;
   clients := List.filter !clients ~f:(fun c' -> not (phys_equal c c'));
   reassign_host ();
   broadcast_lobby ();
@@ -258,6 +259,7 @@ let serve_client reader writer =
          { player = { P.id; name; is_host; conn = P.Ready }; send = writer }
        in
        clients := !clients @ [ c ];
+       printf "join: %s (#%d)%s\n%!" name id (if is_host then " [host]" else "");
        send_to c (Joined id);
        broadcast_lobby ();
        let%bind () =

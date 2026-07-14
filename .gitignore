@@ -2,3 +2,4 @@ _build/
 server.log
 node_modules/
 static/client.js
+bots.log
