@@ -9,7 +9,14 @@ drawings 1–5 stars. Score = aggregated star points (10 per star) + speed bonus
 (seconds left when you submitted).
 
 Drawing tools: a single PEN with a 1–5 thickness slider, flood FILL, ERASE,
-UNDO, CLEAR, and a 15-color palette (full rainbow + basics).
+UNDO, CLEAR, and a 15-color palette (full rainbow + basics). Results open
+with the design's winner-reveal animation: drumroll + beeps, the #1 card
+popping in under falling confetti, runner-up rows sliding in, and a REPLAY
+button.
+
+For testing at high player counts: `./bots.sh 14` fills the lobby with
+passive bots that draw random shapes and rate randomly (`./bots.sh stop`
+to dismiss). Join first if you want to be host.
 
 Built from the `design_handoff_quickdraw` storyboard: all-OCaml, playable in
 the browser from a single link.

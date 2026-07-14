@@ -108,6 +108,35 @@ let stroke_star ?(lw = 2) ~cx ~cy ~r color =
   ctx##.lineWidth := n (float_of_int lw);
   ctx##stroke
 
+(* draw [f] scaled by [s] around (cx, cy) — the winner-card "pop" *)
+let scaled ~cx ~cy ~s f =
+  ctx##save;
+  ctx##translate (n cx) (n cy);
+  ctx##scale (n s) (n s);
+  ctx##translate (n (-.cx)) (n (-.cy));
+  f ();
+  ctx##restore
+
+(* draw [f] rotated by [deg] around (cx, cy) — shaking glyph *)
+let rotated ~cx ~cy ~deg f =
+  ctx##save;
+  ctx##translate (n cx) (n cy);
+  ctx##rotate (n (deg *. Float.pi /. 180.));
+  ctx##translate (n (-.cx)) (n (-.cy));
+  f ();
+  ctx##restore
+
+(* spinning confetti piece: filled rect centered on (cx, cy) at [deg] *)
+let rotated_rect ~cx ~cy ~w ~h ~deg color =
+  ctx##save;
+  ctx##translate (n cx) (n cy);
+  ctx##rotate (n (deg *. Float.pi /. 180.));
+  ctx##.fillStyle := css color;
+  ctx##fillRect
+    (n (-.(float_of_int w) /. 2.)) (n (-.(float_of_int h) /. 2.))
+    (n (float_of_int w)) (n (float_of_int h));
+  ctx##restore
+
 let clear () = fill_rect ~x:0 ~y:0 ~w:T.win_w ~h:T.win_h T.ground
 
 let set_alpha a = ctx##.globalAlpha := n a

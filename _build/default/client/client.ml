@@ -57,6 +57,89 @@ let painting = ref false
 let dragging_slider = ref false
 let last_cell : (int * int) option ref = ref None
 
+(* ---------- Winner-reveal animation state (design 2a) ---------- *)
+
+type confetto =
+  { c_x : float (* 0..1 of screen width *)
+  ; c_w : int
+  ; c_h : int
+  ; c_color : int
+  ; c_delay : float
+  ; c_dur : float
+  ; c_spin : float
+  }
+
+let results_anim_start = ref 0.
+let confetti : confetto list ref = ref []
+
+(* flat storyboard confetti colors: accent, sage, yellow, blue *)
+let confetti_colors = [| T.accent; T.accent2; T.yellow; T.blue |]
+
+let regen_confetti () =
+  confetti
+  := List.init 16 (fun _ ->
+       { c_x = 0.04 +. Random.float 0.92
+       ; c_w = 6 + Random.int 5
+       ; c_h = 6 + Random.int 5
+       ; c_color = confetti_colors.(Random.int (Array.length confetti_colors))
+       ; c_delay = 1.8 +. Random.float 0.5
+       ; c_dur = 2.2 +. Random.float 0.8
+       ; c_spin = (if Random.bool () then 1. else -1.)
+       })
+
+(* drumroll beeps at rising pitch (the design's Graphics.sound), via
+   Web Audio; silently a no-op if audio is unavailable/blocked *)
+let audio_ctx : Js.Unsafe.any option ref = ref None
+
+let get_audio () =
+  match !audio_ctx with
+  | Some a -> Some a
+  | None ->
+    (try
+       let ctor =
+         Js.Unsafe.pure_js_expr "(window.AudioContext||window.webkitAudioContext)"
+       in
+       let a = Js.Unsafe.new_obj ctor [||] in
+       audio_ctx := Some a;
+       Some a
+     with _ -> None)
+
+let drumroll_beeps () =
+  try
+    match get_audio () with
+    | None -> ()
+    | Some actx ->
+      ignore (Js.Unsafe.meth_call actx "resume" [||]);
+      let t0 : float = Js.Unsafe.get actx (Js.string "currentTime") in
+      for i = 0 to 29 do
+        (* 200 -> 800 Hz, one 50ms beep every 60ms for ~1.8s *)
+        let freq = 200. +. (600. *. float_of_int i /. 29.) in
+        let start = t0 +. (0.06 *. float_of_int i) in
+        let osc = Js.Unsafe.meth_call actx "createOscillator" [||] in
+        let gain = Js.Unsafe.meth_call actx "createGain" [||] in
+        Js.Unsafe.set osc (Js.string "type") (Js.string "square");
+        Js.Unsafe.set
+          (Js.Unsafe.get osc (Js.string "frequency"))
+          (Js.string "value") freq;
+        Js.Unsafe.set
+          (Js.Unsafe.get gain (Js.string "gain"))
+          (Js.string "value") 0.03;
+        ignore (Js.Unsafe.meth_call osc "connect" [| Js.Unsafe.inject gain |]);
+        ignore
+          (Js.Unsafe.meth_call gain "connect"
+             [| Js.Unsafe.get actx (Js.string "destination") |]);
+        ignore (Js.Unsafe.meth_call osc "start" [| Js.Unsafe.inject start |]);
+        ignore
+          (Js.Unsafe.meth_call osc "stop"
+             [| Js.Unsafe.inject (start +. 0.05) |])
+      done
+  with _ -> ()
+
+let start_results_anim () =
+  results_anim_start := now_s ();
+  regen_confetti ();
+  drumroll_beeps ()
+
 let me () = List.find_opt (fun (p : P.player) -> p.id = !my_id) !players
 
 let i_am_host () =
@@ -100,7 +183,9 @@ let handle_server_msg (m : P.server_msg) =
   | Vote_now (word, subs) ->
     screen
     := Voting { v_word = word; v_subs = subs; v_stars = []; v_locked = false }
-  | Results lines -> screen := Results lines
+  | Results lines ->
+    start_results_anim ();
+    screen := Results lines
 
 (* ---------- Grid editing ---------- *)
 
@@ -633,58 +718,163 @@ let render_voting (v : vote_state) =
            v.v_locked <- true;
            send (Rate v.v_stars)))
 
+(* Winner reveal (design 2a): drumroll -> #1 card pops with confetti ->
+   remaining rows slide in -> buttons. All timings from the handoff. *)
+
+let clamp01 x = if x < 0. then 0. else if x > 1. then 1. else x
+let ease_out p = 1. -. ((1. -. p) *. (1. -. p))
+
+(* qd-pop: scale .2 -> 1.15 (at 70%) -> 1. *)
+let pop_scale p =
+  let p = ease_out (clamp01 p) in
+  if p < 0.7
+  then 0.2 +. (0.95 *. (p /. 0.7))
+  else 1.15 -. (0.15 *. ((p -. 0.7) /. 0.3))
+
 let render_results (lines : P.score_line list) =
   let px = 37 in
-  Draw.text ~size:30 ~bold:true ~color:T.accent2 ~x:(px + 3) ~y:33
-    "ROUND RESULTS";
-  Draw.text ~size:30 ~bold:true ~x:px ~y:30 "ROUND RESULTS";
+  let t = now_s () -. !results_anim_start in
+  (* -- drumroll (0..1.8s, fades out over 0.3s) -- *)
+  if t < 2.1
+  then (
+    Draw.set_alpha (if t < 1.8 then 1.0 else clamp01 (1. -. ((t -. 1.8) /. 0.3)));
+    let cx = T.win_w / 2 in
+    Draw.text ~size:22 ~bold:true ~align:`Center ~x:cx ~y:230
+      "AND THE WINNER IS…";
+    (* shaking note glyph: rotate ±6° at ~5.5Hz around its bottom center *)
+    let deg = -6. *. cos (2. *. Float.pi *. t /. 0.18) in
+    Draw.rotated ~cx:(float_of_int cx) ~cy:350. ~deg (fun () ->
+      Draw.text ~size:66 ~bold:true ~align:`Center ~x:cx ~y:280 "♬");
+    Draw.set_alpha 1.0);
+  (* -- title pops at 1.9s -- *)
+  if t >= 1.9
+  then (
+    let p = clamp01 ((t -. 1.9) /. 0.4) in
+    Draw.set_alpha (clamp01 (p *. 4.));
+    let tw = Draw.text_width ~size:30 ~bold:true "ROUND RESULTS" in
+    Draw.scaled
+      ~cx:(float_of_int px +. (tw /. 2.)) ~cy:45. ~s:(pop_scale p)
+      (fun () ->
+        Draw.text ~size:30 ~bold:true ~color:T.accent2 ~x:(px + 3) ~y:33
+          "ROUND RESULTS";
+        Draw.text ~size:30 ~bold:true ~x:px ~y:30 "ROUND RESULTS");
+    Draw.set_alpha 1.0);
+  (* -- winner card pops at 2.0s -- *)
+  (match lines with
+   | winner :: _ when t >= 2.0 ->
+     let p = clamp01 ((t -. 2.0) /. 0.5) in
+     let cw = 460
+     and ch = 112 in
+     let cx = (T.win_w - cw) / 2
+     and cy = 88 in
+     Draw.set_alpha (clamp01 (p *. 4.));
+     Draw.scaled
+       ~cx:(float_of_int (T.win_w / 2))
+       ~cy:(float_of_int cy +. (float_of_int ch /. 2.))
+       ~s:(pop_scale p)
+       (fun () ->
+         Draw.shadow_box ~off:4 ~shadow:T.accent ~x:cx ~y:cy ~w:cw ~h:ch
+           ~fill:P.white ();
+         (* not spaced_text: it iterates bytes and would shred the ★ *)
+         Draw.text ~size:20 ~bold:true ~color:T.accent ~align:`Center
+           ~x:(T.win_w / 2) ~y:(cy + 12) "★ W I N N E R ★";
+         Draw.text ~size:40 ~bold:true ~align:`Center ~x:(T.win_w / 2)
+           ~y:(cy + 38)
+           (winner.s_name
+            ^ (if winner.s_player_id = !my_id then " (you)" else ""));
+         let detail =
+           Printf.sprintf "stars %d + speed %d = " winner.votes winner.speed
+         in
+         let total = string_of_int winner.total in
+         let dw = Draw.text_width ~size:18 detail
+         and tw = Draw.text_width ~size:18 ~bold:true total in
+         let x0 = (T.win_w / 2) - int_of_float ((dw +. tw) /. 2.) in
+         Draw.text ~size:18 ~color:T.muted ~x:x0 ~y:(cy + 84) detail;
+         Draw.text ~size:18 ~bold:true ~x:(x0 + int_of_float dw) ~y:(cy + 84)
+           total);
+     Draw.set_alpha 1.0
+   | _ -> ());
+  (* -- rows #2.. slide in from the left (3.2s, 3.6s, then quick) -- *)
+  let rest = match lines with [] -> [] | _ :: r -> r in
+  let m = List.length rest in
   let bw = T.win_w - (2 * px) in
-  (* rows compress to fit many players in the fixed window *)
-  let n = List.length lines in
-  let rh = if n <= 7 then 48 else max 24 (385 / n) in
-  let box_h = rh - (if n <= 7 then 8 else 4) in
+  let rh = if m <= 5 then 48 else min 40 (270 / max 1 m) in
+  let box_h = rh - (if m <= 5 then 8 else 3) in
   let compact = rh < 40 in
-  let sz_rank = if compact then 14 else 24
-  and sz_name = if compact then 13 else 18
-  and sz_detail = if compact then 12 else 16
-  and sz_total = if compact then 14 else 22 in
-  let ty extra = if compact then (box_h - 14) / 2 else extra in
+  let sz_rank = if compact then 13 else 24
+  and sz_name = if compact then 12 else 18
+  and sz_detail = if compact then 11 else 16
+  and sz_total = if compact then 13 else 22 in
+  let ty extra = if compact then (box_h - 12) / 2 else extra in
+  let row_delay i = if i = 0 then 3.2 else 3.6 +. (0.15 *. float_of_int (i - 1)) in
   List.iteri
     (fun i (l : P.score_line) ->
-      let y = 95 + (i * rh) in
-      if i = 0
-      then Draw.shadow_box ~off:4 ~shadow:T.accent ~x:px ~y ~w:bw ~h:box_h
-             ~fill:P.white ()
-      else (
-        Draw.fill_rect ~x:px ~y ~w:bw ~h:box_h P.white;
-        Draw.draw_border ~x:px ~y ~w:bw ~h:box_h ());
-      Draw.text ~size:sz_rank ~bold:true
-        ~color:(if i = 0 then T.accent else T.ink)
-        ~x:(px + 14) ~y:(y + ty 8)
-        (Printf.sprintf "#%d" (i + 1));
-      Draw.text ~size:sz_name ~bold:true ~x:(px + 74) ~y:(y + ty 11)
-        (l.s_name ^ (if l.s_player_id = !my_id then " (you)" else ""));
-      Draw.text ~size:sz_detail ~color:T.muted ~align:`Right ~x:(px + bw - 110)
-        ~y:(y + ty 12)
-        (Printf.sprintf "stars %d + speed %d" l.votes l.speed);
-      Draw.text ~size:sz_total ~bold:true ~align:`Right ~x:(px + bw - 16)
-        ~y:(y + ty 9)
-        (string_of_int l.total))
-    lines;
-  let by = T.win_h - 80 in
-  Draw.text ~size:15 ~color:T.muted ~x:px ~y:(by - 30)
-    (Printf.sprintf
-       "score = star points (%d per star) + speed bonus (seconds left at submit)"
-       P.star_points);
-  if i_am_host ()
+      let p = ease_out (clamp01 ((t -. row_delay i) /. 0.35)) in
+      if p > 0.
+      then (
+        let y = 225 + (i * rh) in
+        let x = px + int_of_float (-40. *. (1. -. p)) in
+        Draw.set_alpha p;
+        Draw.fill_rect ~x ~y ~w:bw ~h:box_h P.white;
+        Draw.draw_border ~x ~y ~w:bw ~h:box_h ();
+        Draw.text ~size:sz_rank ~bold:true ~x:(x + 14) ~y:(y + ty 8)
+          (Printf.sprintf "#%d" (i + 2));
+        Draw.text ~size:sz_name ~bold:true ~x:(x + 74) ~y:(y + ty 11)
+          (l.s_name ^ (if l.s_player_id = !my_id then " (you)" else ""));
+        Draw.text ~size:sz_detail ~color:T.muted ~align:`Right
+          ~x:(x + bw - 110) ~y:(y + ty 12)
+          (Printf.sprintf "stars %d + speed %d" l.votes l.speed);
+        Draw.text ~size:sz_total ~bold:true ~align:`Right ~x:(x + bw - 16)
+          ~y:(y + ty 9)
+          (string_of_int l.total);
+        Draw.set_alpha 1.0))
+    rest;
+  (* -- footnote + buttons last (>= 4s or after the final row) -- *)
+  let buttons_at =
+    Float.max 4. (row_delay (max 0 (m - 1)) +. 0.35)
+  in
+  let bp = ease_out (clamp01 ((t -. buttons_at) /. 0.35)) in
+  if bp > 0.
   then (
-    let w1 = button ~x:px ~y:by "NEXT ROUND" (fun () -> send Next_round) in
-    ignore
-      (button ~fill:T.disabled ~text_color:T.ink ~x:(px + w1 + 20) ~y:by
-         "BACK TO LOBBY" (fun () -> send Back_to_lobby)))
-  else
-    Draw.text ~size:17 ~color:T.muted ~x:px ~y:(by + 12)
-      "waiting for the host to start the next round..."
+    let by = T.win_h - 80 in
+    let xoff = int_of_float (-40. *. (1. -. bp)) in
+    Draw.set_alpha bp;
+    Draw.text ~size:14 ~color:T.muted ~x:(px + xoff) ~y:(by - 26)
+      (Printf.sprintf
+         "score = star points (%d per star) + speed bonus (seconds left at submit)"
+         P.star_points);
+    (if i_am_host ()
+     then (
+       let w1 =
+         button ~x:(px + xoff) ~y:by "NEXT ROUND" (fun () -> send Next_round)
+       in
+       ignore
+         (button ~fill:T.disabled ~text_color:T.ink ~x:(px + xoff + w1 + 20)
+            ~y:by "BACK TO LOBBY" (fun () -> send Back_to_lobby)))
+     else
+       Draw.text ~size:17 ~color:T.muted ~x:(px + xoff) ~y:(by + 12)
+         "waiting for the host to start the next round...");
+    Draw.set_alpha 1.0);
+  (* -- confetti on top (1.8s..~5.3s) -- *)
+  List.iter
+    (fun c ->
+      let p = (t -. c.c_delay) /. c.c_dur in
+      if p >= 0. && p <= 1.
+      then
+        Draw.rotated_rect
+          ~cx:(c.c_x *. float_of_int T.win_w)
+          ~cy:(-30. +. (p *. float_of_int (T.win_h + 80)))
+          ~w:c.c_w ~h:c.c_h
+          ~deg:(540. *. p *. c.c_spin)
+          c.c_color)
+    !confetti;
+  (* -- replay (top right, always available) -- *)
+  let rl = "↻ REPLAY" in
+  let rw = int_of_float (Draw.text_width ~size:14 ~bold:true rl) + 20 in
+  let rx = T.win_w - 16 - rw in
+  Draw.shadow_box ~off:2 ~x:rx ~y:14 ~w:rw ~h:26 ~fill:T.disabled ();
+  Draw.text ~size:14 ~bold:true ~align:`Center ~x:(rx + (rw / 2)) ~y:20 rl;
+  add_hit ~x:rx ~y:14 ~w:rw ~h:26 start_results_anim
 
 let render_message ?(sub = "") msg =
   let cx = T.win_w / 2 in
