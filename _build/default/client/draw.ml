@@ -85,6 +85,29 @@ let shadow_box ?(off = 3) ?(shadow = T.ink) ?(border = T.ink) ?(border_w = 2)
   fill_rect ~x ~y ~w ~h fill;
   draw_border ~lw:border_w ~color:border ~x ~y ~w ~h ()
 
+(* 5-pointed star (voting screen ratings) *)
+let star_path ~cx ~cy ~r =
+  ctx##beginPath;
+  for i = 0 to 9 do
+    let rr = if i mod 2 = 0 then float_of_int r else float_of_int r *. 0.45 in
+    let a = (Float.pi *. float_of_int i /. 5.) -. (Float.pi /. 2.) in
+    let x = float_of_int cx +. (rr *. cos a)
+    and y = float_of_int cy +. (rr *. sin a) in
+    if i = 0 then ctx##moveTo (n x) (n y) else ctx##lineTo (n x) (n y)
+  done;
+  ctx##closePath
+
+let fill_star ~cx ~cy ~r color =
+  star_path ~cx ~cy ~r;
+  ctx##.fillStyle := css color;
+  ctx##fill
+
+let stroke_star ?(lw = 2) ~cx ~cy ~r color =
+  star_path ~cx ~cy ~r;
+  ctx##.strokeStyle := css color;
+  ctx##.lineWidth := n (float_of_int lw);
+  ctx##stroke
+
 let clear () = fill_rect ~x:0 ~y:0 ~w:T.win_w ~h:T.win_h T.ground
 
 let set_alpha a = ctx##.globalAlpha := n a

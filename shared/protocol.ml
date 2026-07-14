@@ -15,6 +15,11 @@ let min_players = 2
 let round_seconds = 90
 let countdown_seconds = 3
 
+(* star-rating vote: each player gives every other drawing 1..max_stars,
+   worth star_points each in the final score *)
+let max_stars = 5
+let star_points = 10
+
 (* Colors are carried as 0xRRGGBB ints, same convention as Graphics.rgb. *)
 
 type color = int [@@deriving sexp]
@@ -62,7 +67,7 @@ type client_msg =
   | Set_ready of bool
   | Start_round (* host only *)
   | Submit of grid * int (* grid, seconds left at submit *)
-  | Rank of (int * int) list (* (player_id, rank 1..n-1) for each opponent *)
+  | Rate of (int * int) list (* (player_id, stars 1..5) for each opponent *)
   | Next_round (* host, from results *)
   | Back_to_lobby (* host, from results *)
 [@@deriving sexp]
@@ -101,8 +106,15 @@ module Tokens = struct
   let yellow = 0xE8B23A
   let blue = 0x4A6FA5
 
-  (* the 6 drawing palette colors, in swatch-grid order *)
-  let palette = [| ink; accent; accent2; yellow; blue; white |]
+  (* drawing palette, in swatch-grid order (3 per row): the full rainbow
+     plus the basics *)
+  let palette =
+    [| ink; 0x9C9C9C; white (* ink · gray · white *)
+     ; 0xD64541; accent; yellow (* red · orange · yellow *)
+     ; 0x4C9A3F; accent2; 0x7FB2D9 (* green · sage · sky *)
+     ; blue; 0x3F3F74; 0x8E5DA2 (* blue · indigo · violet *)
+     ; 0xE59CB4; 0x7A4E2D; 0xD9B98C (* pink · brown · tan *)
+    |]
 
   let win_w = 800
   let win_h = 600

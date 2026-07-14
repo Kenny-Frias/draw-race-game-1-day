@@ -20,8 +20,7 @@ let fmt_clock secs =
 type vote_state =
   { v_word : string
   ; v_subs : P.submission list
-  ; mutable v_selected : int option (* player_id of selected card *)
-  ; mutable v_assigned : (int * int) list (* player_id -> rank *)
+  ; mutable v_stars : (int * int) list (* player_id -> stars 1..5 *)
   ; mutable v_locked : bool
   }
 
@@ -42,14 +41,15 @@ let grid = ref (P.empty_grid ())
 let undo : P.color array list ref = ref []
 
 type tool =
-  | Pen1
-  | Pen3
+  | Pen
   | Fill
   | Erase
 
-let tool = ref Pen1
+let tool = ref Pen
+let pen_size = ref 1 (* 1..5, set by the thickness slider *)
 let sel_color = ref 0 (* index into T.palette *)
 let painting = ref false
+let dragging_slider = ref false
 let last_cell : (int * int) option ref = ref None
 
 let me () = List.find_opt (fun (p : P.player) -> p.id = !my_id) !players
@@ -92,7 +92,7 @@ let handle_server_msg (m : P.server_msg) =
   | Word_reveal (word, deadline) ->
     grid := P.empty_grid ();
     undo := [];
-    tool := Pen1;
+    tool := Pen;
     sel_color := 0;
     screen := Reveal (word, deadline)
   | Drawing_over ->
@@ -101,13 +101,7 @@ let handle_server_msg (m : P.server_msg) =
      | _ -> ())
   | Vote_now (word, subs) ->
     screen
-    := Voting
-         { v_word = word
-         ; v_subs = subs
-         ; v_selected = None
-         ; v_assigned = []
-         ; v_locked = false
-         }
+    := Voting { v_word = word; v_subs = subs; v_stars = []; v_locked = false }
   | Results lines -> screen := Results lines
 
 (* ---------- Grid editing ---------- *)
@@ -118,9 +112,12 @@ let set_cell col row color =
   if col >= 0 && col < P.grid_cols && row >= 0 && row < P.grid_rows
   then !grid.(gidx ~col ~row) <- color
 
-let stamp3 col row color =
-  for dc = -1 to 1 do
-    for dr = -1 to 1 do
+(* n×n stamp centered on the cell (pen thickness) *)
+let stamp n col row color =
+  let lo = -((n - 1) / 2)
+  and hi = n / 2 in
+  for dc = lo to hi do
+    for dr = lo to hi do
       set_cell (col + dc) (row + dr) color
     done
   done
@@ -157,9 +154,8 @@ let pop_undo () =
 
 let apply_at col row =
   match !tool with
-  | Pen1 -> set_cell col row T.palette.(!sel_color)
-  | Pen3 -> stamp3 col row T.palette.(!sel_color)
-  | Erase -> stamp3 col row P.white
+  | Pen -> stamp !pen_size col row T.palette.(!sel_color)
+  | Erase -> stamp !pen_size col row P.white
   | Fill -> () (* fill happens on mousedown only *)
 
 (* DDA walk so fast drags leave no gaps *)
@@ -192,6 +188,27 @@ let cell_of_mouse mx my =
      && my >= float_of_int canvas_y
   then Some (c, r)
   else None
+
+(* pen thickness slider, under the PEN button *)
+let slider_x = dpad
+let slider_y = canvas_y + 44
+let slider_w = toolbar_w
+let slider_h = 36
+let track_x0 = slider_x + 8
+let track_x1 = slider_x + slider_w - 8
+
+let in_slider mx my =
+  mx >= float_of_int slider_x
+  && mx <= float_of_int (slider_x + slider_w)
+  && my >= float_of_int slider_y
+  && my <= float_of_int (slider_y + slider_h)
+
+let set_pen_size_from mx =
+  let t =
+    (mx -. float_of_int track_x0) /. float_of_int (track_x1 - track_x0)
+  in
+  let s = 1 + int_of_float (Float.round (t *. 4.)) in
+  pen_size := max 1 (min 5 s)
 
 (* ---------- UI helpers ---------- *)
 
@@ -363,8 +380,30 @@ let render_reveal word deadline =
   Draw.text ~size:17 ~color:T.muted ~align:`Center ~x:cx ~y:470
     "everyone gets the SAME word · drawing starts together"
 
-let tool_buttons = [ "PEN·1", `T Pen1; "PEN·3", `T Pen3; "FILL", `T Fill
-                   ; "ERASE", `T Erase; "UNDO", `A `Undo; "CLEAR", `A `Clear ]
+(* PEN (with slider under it), then the rest; slider occupies one slot *)
+let tool_button ~y ~label ~selected ~warn on_click =
+  let fill = if selected then T.accent else P.white in
+  let color =
+    if selected then 0xFFFFFF else if warn then T.accent else T.ink
+  in
+  Draw.fill_rect ~x:dpad ~y ~w:toolbar_w ~h:36 fill;
+  Draw.draw_border ~x:dpad ~y ~w:toolbar_w ~h:36 ();
+  Draw.text ~size:15 ~bold:true ~color ~align:`Center
+    ~x:(dpad + (toolbar_w / 2)) ~y:(y + 9) label;
+  add_hit ~x:dpad ~y ~w:toolbar_w ~h:36 on_click
+
+let render_slider () =
+  Draw.fill_rect ~x:slider_x ~y:slider_y ~w:slider_w ~h:slider_h P.white;
+  Draw.draw_border ~x:slider_x ~y:slider_y ~w:slider_w ~h:slider_h ();
+  let ty = slider_y + (slider_h / 2) in
+  Draw.line ~lw:2 ~x1:track_x0 ~y1:ty ~x2:track_x1 ~y2:ty T.muted;
+  for s = 1 to 5 do
+    let x = track_x0 + ((s - 1) * (track_x1 - track_x0) / 4) in
+    Draw.fill_rect ~x:(x - 1) ~y:(ty - 4) ~w:2 ~h:8 T.muted
+  done;
+  let kx = track_x0 + ((!pen_size - 1) * (track_x1 - track_x0) / 4) in
+  Draw.fill_rect ~x:(kx - 5) ~y:(ty - 10) ~w:10 ~h:20 T.accent;
+  Draw.draw_border ~x:(kx - 5) ~y:(ty - 10) ~w:10 ~h:20 ()
 
 let render_drawing word deadline =
   (* top bar *)
@@ -381,44 +420,37 @@ let render_drawing word deadline =
   ignore
     (button ~fill:T.accent2 ~x:sub_x ~y:8 "SUBMIT" (fun () ->
        submit_drawing (max 0 secs_left)));
-  (* toolbar *)
-  List.iteri
-    (fun i (label, act) ->
-      let y = canvas_y + (i * 44) in
-      let selected =
-        match act with `T t -> !tool = t | `A _ -> false
-      in
-      let fill = if selected then T.accent else P.white in
-      let color =
-        if selected then 0xFFFFFF
-        else if String.equal label "CLEAR" then T.accent
-        else T.ink
-      in
-      Draw.fill_rect ~x:dpad ~y ~w:toolbar_w ~h:36 fill;
-      Draw.draw_border ~x:dpad ~y ~w:toolbar_w ~h:36 ();
-      Draw.text ~size:15 ~bold:true ~color ~align:`Center
-        ~x:(dpad + (toolbar_w / 2)) ~y:(y + 9) label;
-      add_hit ~x:dpad ~y ~w:toolbar_w ~h:36 (fun () ->
-        match act with
-        | `T t -> tool := t
-        | `A `Undo -> pop_undo ()
-        | `A `Clear ->
-          push_undo ();
-          grid := P.empty_grid ()))
-    tool_buttons;
-  (* swatches: 2-column grid, bottom-aligned with the canvas *)
-  let sw = (toolbar_w - 6) / 2
-  and sh = 30
-  and sgap = 6 in
-  let rows = (Array.length T.palette + 1) / 2 in
+  (* toolbar: PEN + its thickness slider, then FILL / ERASE / UNDO / CLEAR *)
+  tool_button ~y:canvas_y
+    ~label:(Printf.sprintf "PEN·%d" !pen_size)
+    ~selected:(!tool = Pen) ~warn:false
+    (fun () -> tool := Pen);
+  render_slider ();
+  tool_button ~y:(canvas_y + 88) ~label:"FILL" ~selected:(!tool = Fill)
+    ~warn:false
+    (fun () -> tool := Fill);
+  tool_button ~y:(canvas_y + 132) ~label:"ERASE" ~selected:(!tool = Erase)
+    ~warn:false
+    (fun () -> tool := Erase);
+  tool_button ~y:(canvas_y + 176) ~label:"UNDO" ~selected:false ~warn:false
+    (fun () -> pop_undo ());
+  tool_button ~y:(canvas_y + 220) ~label:"CLEAR" ~selected:false ~warn:true
+    (fun () ->
+      push_undo ();
+      grid := P.empty_grid ());
+  (* swatches: 3-column grid, bottom-aligned with the canvas *)
+  let sw = (toolbar_w - 8) / 3
+  and sh = 26
+  and sgap = 4 in
+  let rows = (Array.length T.palette + 2) / 3 in
   let sy0 = canvas_y + canvas_h - (rows * (sh + sgap)) + sgap in
   Array.iteri
     (fun i c ->
-      let x = dpad + (i mod 2 * (sw + sgap))
-      and y = sy0 + (i / 2 * (sh + sgap)) in
+      let x = dpad + (i mod 3 * (sw + sgap))
+      and y = sy0 + (i / 3 * (sh + sgap)) in
       if !sel_color = i
-      then Draw.draw_border ~lw:2 ~color:T.accent2 ~x:(x - 3) ~y:(y - 3)
-             ~w:(sw + 6) ~h:(sh + 6) ();
+      then Draw.draw_border ~lw:2 ~color:T.accent2 ~x:(x - 2) ~y:(y - 2)
+             ~w:(sw + 4) ~h:(sh + 4) ();
       Draw.fill_rect ~x ~y ~w:sw ~h:sh c;
       Draw.draw_border ~x ~y ~w:sw ~h:sh ();
       add_hit ~x ~y ~w:sw ~h:sh (fun () -> sel_color := i))
@@ -464,12 +496,32 @@ let render_waiting () =
     "waiting for the other players...";
   draw_grid_thumb ~x:(cx - 160) ~y:220 ~w:320 ~h:240 !grid
 
+(* star row overlaid on the bottom of a voting card *)
+let star_band ~x ~y ~card_w ~rating ~clickable ~on_rate =
+  let band_h = 26 in
+  Draw.fill_rect ~x ~y ~w:card_w ~h:band_h P.white;
+  Draw.draw_border ~x ~y ~w:card_w ~h:band_h ();
+  let cy = y + (band_h / 2) in
+  let spacing = 24 in
+  for s = 1 to P.max_stars do
+    let cx = x + (card_w / 2) + ((s - 3) * spacing) in
+    if s <= rating
+    then (
+      Draw.fill_star ~cx ~cy ~r:10 T.yellow;
+      Draw.stroke_star ~lw:2 ~cx ~cy ~r:10 T.ink)
+    else Draw.stroke_star ~lw:2 ~cx ~cy ~r:10 T.muted;
+    if clickable
+    then
+      add_hit ~x:(cx - (spacing / 2)) ~y ~w:spacing ~h:band_h (fun () ->
+        on_rate s)
+  done
+
 let render_voting (v : vote_state) =
   let px = 33 in
   Draw.text ~size:26 ~bold:true ~x:px ~y:24
-    (Printf.sprintf "RANK THE %sS" (string_upper v.v_word));
+    (Printf.sprintf "RATE THE %sS" (string_upper v.v_word));
   Draw.text ~size:16 ~color:T.muted ~align:`Right ~x:(T.win_w - px) ~y:32
-    "click a drawing, then a rank";
+    "give each drawing 1–5 stars";
   let n = List.length v.v_subs in
   let cols = if n <= 4 then n else (n + 1) / 2 in
   let card_w = min 170 ((T.win_w - (2 * px) - ((cols - 1) * 24)) / cols) in
@@ -493,68 +545,37 @@ let render_voting (v : vote_state) =
           ~x:(x + (card_w / 2)) ~y:(y + card_h - 18) "YOURS";
         Draw.set_alpha 1.0)
       else (
-        (* selection ring *)
-        (match v.v_selected with
-         | Some pid when pid = s.player_id ->
-           Draw.draw_border ~lw:3 ~color:T.accent2 ~x:(x - 4) ~y:(y - 4)
-             ~w:(card_w + 8) ~h:(card_h + 8) ()
-         | _ -> ());
-        (* rank badge, top-left corner *)
-        let bs = 38 in
-        let bx = x - 12
-        and by = y - 12 in
-        (match List.assoc_opt s.player_id v.v_assigned with
-         | Some r ->
-           Draw.fill_rect ~x:bx ~y:by ~w:bs ~h:bs T.accent;
-           Draw.draw_border ~x:bx ~y:by ~w:bs ~h:bs ();
-           Draw.text ~size:21 ~bold:true ~color:0xFFFFFF ~align:`Center
-             ~x:(bx + (bs / 2)) ~y:(by + 8) (string_of_int r)
-         | None ->
-           Draw.fill_rect ~x:bx ~y:by ~w:bs ~h:bs T.disabled;
-           Draw.draw_border ~x:bx ~y:by ~w:bs ~h:bs ();
-           Draw.text ~size:21 ~bold:true ~align:`Center ~x:(bx + (bs / 2))
-             ~y:(by + 8) "?");
-        if not v.v_locked
-        then
-          add_hit ~x ~y ~w:card_w ~h:card_h (fun () ->
-            v.v_selected <- Some s.player_id));
+        let rating =
+          match List.assoc_opt s.player_id v.v_stars with
+          | Some r -> r
+          | None -> 0
+        in
+        star_band ~x ~y:(y + card_h - 26) ~card_w ~rating
+          ~clickable:(not v.v_locked) ~on_rate:(fun stars ->
+            v.v_stars
+            <- (s.player_id, stars)
+               :: List.filter (fun (p, _) -> p <> s.player_id) v.v_stars));
       Draw.text ~size:16 ~align:`Center ~x:(x + (card_w / 2)) ~y:(y + card_h + 8)
         (Printf.sprintf "%s · %s" s.player_name
            (fmt_clock (P.round_seconds - s.seconds_left))))
     v.v_subs;
-  (* bottom: rank chips + lock in *)
+  (* bottom: lock in once every drawing is rated *)
   let n_opp = n - 1 in
   let cy = T.win_h - 78 in
-  Draw.text ~size:18 ~x:px ~y:(cy + 12) "assign:";
-  for r = 1 to n_opp do
-    let x = px + 86 + ((r - 1) * 54) in
-    let used = List.exists (fun (_, r') -> r' = r) v.v_assigned in
-    Draw.fill_rect ~x ~y:cy ~w:43 ~h:43 (if used then T.accent else P.white);
-    Draw.draw_border ~x ~y:cy ~w:43 ~h:43 ();
-    Draw.text ~size:21 ~bold:true
-      ~color:(if used then 0xFFFFFF else T.ink)
-      ~align:`Center ~x:(x + 21) ~y:(cy + 10) (string_of_int r);
-    if not v.v_locked
-    then
-      add_hit ~x ~y:cy ~w:43 ~h:43 (fun () ->
-        match v.v_selected with
-        | Some pid ->
-          v.v_assigned
-          <- (pid, r)
-             :: List.filter (fun (p, r') -> p <> pid && r' <> r) v.v_assigned
-        | None -> ())
-  done;
-  let all_assigned = List.length v.v_assigned = n_opp in
+  let all_rated = List.length v.v_stars = n_opp in
+  Draw.text ~size:17 ~color:T.muted ~x:px ~y:(cy + 12)
+    (if all_rated then "all rated — lock it in!"
+     else "rate every drawing to lock in");
   if v.v_locked
   then
     Draw.text ~size:18 ~bold:true ~color:T.accent2 ~align:`Right
       ~x:(T.win_w - px) ~y:(cy + 12) "LOCKED · waiting…"
   else
     ignore
-      (button ~fill:T.accent2 ~enabled:all_assigned ~x:(T.win_w - px - 140)
+      (button ~fill:T.accent2 ~enabled:all_rated ~x:(T.win_w - px - 140)
          ~y:cy "LOCK IN" (fun () ->
            v.v_locked <- true;
-           send (Rank v.v_assigned)))
+           send (Rate v.v_stars)))
 
 let render_results (lines : P.score_line list) =
   let px = 37 in
@@ -579,13 +600,15 @@ let render_results (lines : P.score_line list) =
         (l.s_name ^ (if l.s_player_id = !my_id then " (you)" else ""));
       Draw.text ~size:16 ~color:T.muted ~align:`Right ~x:(px + bw - 110)
         ~y:(y + 12)
-        (Printf.sprintf "votes %d + speed %d" l.votes l.speed);
+        (Printf.sprintf "stars %d + speed %d" l.votes l.speed);
       Draw.text ~size:22 ~bold:true ~align:`Right ~x:(px + bw - 16) ~y:(y + 9)
         (string_of_int l.total))
     lines;
   let by = T.win_h - 80 in
   Draw.text ~size:15 ~color:T.muted ~x:px ~y:(by - 30)
-    "score = vote points + speed bonus (seconds left at submit)";
+    (Printf.sprintf
+       "score = star points (%d per star) + speed bonus (seconds left at submit)"
+       P.star_points);
   if i_am_host ()
   then (
     let w1 = button ~x:px ~y:by "NEXT ROUND" (fun () -> send Next_round) in
@@ -649,21 +672,30 @@ let on_mousedown e =
   let mx, my = mouse_xy e in
   (match !screen with
    | Drawing _ ->
-     (match cell_of_mouse mx my with
-      | Some (c, r) ->
-        push_undo ();
-        (match !tool with
-         | Fill -> flood_fill c r T.palette.(!sel_color)
-         | _ ->
-           painting := true;
-           apply_at c r;
-           last_cell := Some (c, r))
-      | None -> ())
+     if in_slider mx my
+     then (
+       dragging_slider := true;
+       set_pen_size_from mx)
+     else (
+       match cell_of_mouse mx my with
+       | Some (c, r) ->
+         push_undo ();
+         (match !tool with
+          | Fill -> flood_fill c r T.palette.(!sel_color)
+          | _ ->
+            painting := true;
+            apply_at c r;
+            last_cell := Some (c, r))
+       | None -> ())
    | _ -> ());
   Js._true
 
 let on_mousemove e =
-  if !painting
+  if !dragging_slider
+  then (
+    let mx, _my = mouse_xy e in
+    set_pen_size_from mx)
+  else if !painting
   then (
     let mx, my = mouse_xy e in
     match cell_of_mouse mx my with
@@ -677,6 +709,7 @@ let on_mousemove e =
 
 let on_mouseup _e =
   painting := false;
+  dragging_slider := false;
   last_cell := None;
   Js._true
 
@@ -703,16 +736,21 @@ let touch_xy (e : Dom_html.touchEvent Js.t) =
 let touch_start_paint (mx, my) =
   match !screen with
   | Drawing _ ->
-    (match cell_of_mouse mx my with
-     | Some (c, r) ->
-       push_undo ();
-       (match !tool with
-        | Fill -> flood_fill c r T.palette.(!sel_color)
-        | _ ->
-          painting := true;
-          apply_at c r;
-          last_cell := Some (c, r))
-     | None -> ())
+    if in_slider mx my
+    then (
+      dragging_slider := true;
+      set_pen_size_from mx)
+    else (
+      match cell_of_mouse mx my with
+      | Some (c, r) ->
+        push_undo ();
+        (match !tool with
+         | Fill -> flood_fill c r T.palette.(!sel_color)
+         | _ ->
+           painting := true;
+           apply_at c r;
+           last_cell := Some (c, r))
+      | None -> ())
   | _ -> ()
 
 let () =
@@ -726,20 +764,30 @@ let () =
        (Dom_html.handler (fun e ->
           (match touch_xy e with
            | Some p ->
-             (* only swallow the event when it lands on the paint area,
-                so taps on buttons still become clicks *)
-             (match cell_of_mouse (fst p) (snd p) with
-              | Some _ ->
-                Dom.preventDefault e;
-                touch_start_paint p
-              | None -> ())
+             (* only swallow the event when it lands on the paint area or
+                the slider, so taps on buttons still become clicks *)
+             let on_paint =
+               match cell_of_mouse (fst p) (snd p) with
+               | Some _ -> true
+               | None -> in_slider (fst p) (snd p)
+             in
+             if on_paint
+             then (
+               Dom.preventDefault e;
+               touch_start_paint p)
            | None -> ());
           Js._true))
        Js._false);
   ignore
     (Dom_html.addEventListener Draw.canvas Dom_html.Event.touchmove
        (Dom_html.handler (fun e ->
-          if !painting
+          if !dragging_slider
+          then (
+            Dom.preventDefault e;
+            match touch_xy e with
+            | Some (mx, _) -> set_pen_size_from mx
+            | None -> ())
+          else if !painting
           then (
             Dom.preventDefault e;
             match touch_xy e with
@@ -758,6 +806,7 @@ let () =
     (Dom_html.addEventListener Draw.canvas Dom_html.Event.touchend
        (Dom_html.handler (fun _ ->
           painting := false;
+          dragging_slider := false;
           last_cell := None;
           Js._true))
        Js._false);

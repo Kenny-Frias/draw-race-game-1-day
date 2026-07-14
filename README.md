@@ -4,8 +4,12 @@ JSIP 1 Day Project
 # QUICKDRAW — multiplayer drawing game
 
 2–8 players get the same random word, draw it on an 80×60 pixel grid against a
-shared 90-second timer (no live view of opponents), then rank each other's
-drawings. Score = vote points + speed bonus (seconds left when you submitted).
+shared 90-second timer (no live view of opponents), then rate each other's
+drawings 1–5 stars. Score = aggregated star points (10 per star) + speed bonus
+(seconds left when you submitted).
+
+Drawing tools: a single PEN with a 1–5 thickness slider, flood FILL, ERASE,
+UNDO, CLEAR, and a 15-color palette (full rainbow + basics).
 
 Built from the `design_handoff_quickdraw` storyboard: all-OCaml, playable in
 the browser from a single link.
@@ -29,7 +33,7 @@ test/     bot.ml        end-to-end test: N websocket bots play a full round
 
 One OCaml server binary serves everything; players just open the URL, enter a
 name, and appear in the lobby. The wire protocol is s-expressions over a
-single websocket: `join / ready / start / submit / rank / results`.
+single websocket: `join / ready / start / submit / rate / results`.
 
 ## Build & run
 

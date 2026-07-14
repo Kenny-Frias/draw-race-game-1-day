@@ -85,14 +85,16 @@ let reassign_host () =
 
 let compute_scores (subs : P.submission list)
       (ballots : (int * (int * int) list) list) : P.score_line list =
-  let m = List.length subs in
+  (* aggregate star ratings: every voter gives each other drawing
+     1..max_stars, each star worth star_points *)
   let vote_points = Hashtbl.create (module Int) in
-  List.iter ballots ~f:(fun (_voter, ranks) ->
-    List.iter ranks ~f:(fun (pid, r) ->
-      if r >= 1 && r < m
-      then
+  List.iter ballots ~f:(fun (voter, ratings) ->
+    List.iter ratings ~f:(fun (pid, stars) ->
+      if pid <> voter && List.exists subs ~f:(fun s -> s.P.player_id = pid)
+      then (
+        let stars = Int.max 1 (Int.min stars P.max_stars) in
         Hashtbl.update vote_points pid ~f:(fun v ->
-          Option.value v ~default:0 + ((m - r) * 10))));
+          Option.value v ~default:0 + (stars * P.star_points)))));
   List.map subs ~f:(fun (s : P.submission) ->
     let votes = Option.value (Hashtbl.find vote_points s.player_id) ~default:0 in
     let speed = Int.max 0 (Int.min s.seconds_left P.round_seconds) in
@@ -219,11 +221,11 @@ let handle_msg (c : client) (msg : P.client_msg) =
             ];
        check_drawing_done ()
      | _ -> ())
-  | Rank ranks ->
+  | Rate ratings ->
     (match !phase with
      | Voting v when not (List.exists v.ballots ~f:(fun (id, _) -> id = c.player.id))
        ->
-       v.ballots <- (c.player.id, ranks) :: v.ballots;
+       v.ballots <- (c.player.id, ratings) :: v.ballots;
        check_voting_done ()
      | _ -> ())
 

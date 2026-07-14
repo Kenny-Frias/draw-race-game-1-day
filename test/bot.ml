@@ -47,13 +47,14 @@ let play ~uri ~name ~is_starter ~n_bots =
                      send (Submit (g, 42)))
                 | Drawing_over -> printf "[%s] drawing over\n%!" name
                 | Vote_now (w, subs) ->
-                  printf "[%s] voting on %d %ss\n%!" name (List.length subs) w;
+                  printf "[%s] rating %d %ss\n%!" name (List.length subs) w;
                   let opponents =
                     List.filter subs ~f:(fun s -> s.P.player_id <> !my_id)
                   in
+                  (* varied star ratings so aggregation is exercised *)
                   send
-                    (Rank (List.mapi opponents ~f:(fun i s ->
-                       s.P.player_id, i + 1)))
+                    (Rate (List.mapi opponents ~f:(fun i s ->
+                       s.P.player_id, (i mod P.max_stars) + 1)))
                 | Results lines ->
                   printf "[%s] RESULTS: %s\n%!" name
                     (String.concat ~sep:" | "
