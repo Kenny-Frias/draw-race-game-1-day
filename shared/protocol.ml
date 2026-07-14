@@ -25,6 +25,12 @@ let countdown_seconds = 3
 let max_stars = 5
 let star_points = 10
 
+(* easter-egg layer *)
+let egg_points = 50 (* paint the hidden jackpot cell *)
+let bonus_points = 10 (* first to paint with the broadcast bonus color *)
+let wipe_count = 40 (* cells destroyed by the cursed-cell wipe *)
+let bonus_period_s = 25 (* a fresh bonus color this often *)
+
 (* Colors are carried as 0xRRGGBB ints, same convention as Graphics.rgb. *)
 
 type color = int [@@deriving sexp]
@@ -62,8 +68,16 @@ type score_line =
   ; s_name : string
   ; votes : int
   ; speed : int
+  ; egg : int (* jackpot secret cell *)
+  ; bonus : int (* bonus-color claims *)
   ; total : int
   }
+[@@deriving sexp]
+
+(* the two hidden cells seeded each round *)
+type secret_kind =
+  | Jackpot
+  | Cursed
 [@@deriving sexp]
 
 (* Client -> server *)
@@ -75,6 +89,10 @@ type client_msg =
   | Rate of (int * int) list (* (player_id, stars 1..5) for each opponent *)
   | Next_round (* host, from results *)
   | Back_to_lobby (* host, from results *)
+  | Lock_color of int * color (* sabotage: lock this color on that player *)
+  | Hit_secret of secret_kind (* my paint just landed on a secret cell *)
+  | Curse_wipe of int (* cursed-cell reward: wipe this player's cells *)
+  | Claim_bonus (* I painted with the active bonus color *)
 [@@deriving sexp]
 
 (* Server -> client *)
@@ -88,6 +106,17 @@ type server_msg =
   | Drawing_over (* timer hit zero: force submit *)
   | Vote_now of string * submission list (* word, everyone's drawings *)
   | Results of score_line list
+  | Lock_offer of (int * string) list
+    (* you submitted first: opponents (id, name) you may lock a color on *)
+  | Color_locked of string * color
+    (* locker's name, color unusable for the rest of the round *)
+  | Secret_cells of int * int
+    (* jackpot idx, cursed idx (flat grid indices); UI must keep them hidden *)
+  | Jackpot_hit of string (* who found the jackpot (+egg_points), revealed now *)
+  | Curse_offer of (int * string) list (* you hit the cursed cell: pick a victim *)
+  | Wipe_cells of string * int (* wiper's name, how many of your cells to lose *)
+  | Bonus_color of color * float (* bonus color + its expiry (unix epoch) *)
+  | Bonus_claimed of string * color (* who banked it (+bonus_points) *)
 [@@deriving sexp]
 
 let string_of_client_msg m = Sexplib0.Sexp.to_string (sexp_of_client_msg m)
@@ -125,3 +154,21 @@ module Tokens = struct
   let win_w = 800
   let win_h = 600
 end
+
+(* human-readable palette color names (sabotage dialog, bonus banner),
+   in the same order as Tokens.palette *)
+let color_name (c : color) =
+  let names =
+    [| "INK"; "GRAY"; "WHITE"
+     ; "RED"; "ORANGE"; "YELLOW"
+     ; "GREEN"; "SAGE"; "SKY"
+     ; "BLUE"; "INDIGO"; "VIOLET"
+     ; "PINK"; "BROWN"; "TAN"
+    |]
+  in
+  let rec find i =
+    if i >= Array.length Tokens.palette then Printf.sprintf "#%06X" c
+    else if Tokens.palette.(i) = c && i < Array.length names then names.(i)
+    else find (i + 1)
+  in
+  find 0

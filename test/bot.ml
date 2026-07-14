@@ -61,9 +61,43 @@ let play ~uri ~name ~is_starter ~n_bots =
                   printf "[%s] RESULTS: %s\n%!" name
                     (String.concat ~sep:" | "
                        (List.map lines ~f:(fun l ->
-                          sprintf "%s votes=%d speed=%d total=%d" l.s_name
-                            l.votes l.speed l.total)));
+                          sprintf "%s votes=%d speed=%d egg=%d bonus=%d total=%d"
+                            l.s_name l.votes l.speed l.egg l.bonus l.total)));
                   Ivar.fill_if_empty got_results ()
+                | Secret_cells (j, cu) ->
+                  printf "[%s] secrets: jackpot@%d cursed@%d\n%!" name j cu;
+                  (* every bot races for the jackpot; the starter also pokes
+                     the cursed cell to exercise the wipe path *)
+                  send (Hit_secret Jackpot);
+                  if is_starter then send (Hit_secret Cursed)
+                | Jackpot_hit who ->
+                  printf "[%s] jackpot found by %s (+%d)\n%!" name who
+                    P.egg_points
+                | Curse_offer targets ->
+                  (match targets with
+                   | (tid, tname) :: _ ->
+                     printf "[%s] cursed cell! wiping %s\n%!" name tname;
+                     send (Curse_wipe tid)
+                   | [] -> ())
+                | Wipe_cells (who, n) ->
+                  printf "[%s] SABOTAGED: %s wiped %d of my cells\n%!" name
+                    who n
+                | Bonus_color (c, _expires) ->
+                  printf "[%s] bonus color %s is up\n%!" name (P.color_name c)
+                | Bonus_claimed (who, c) ->
+                  printf "[%s] %s banked the %s bonus\n%!" name who
+                    (P.color_name c)
+                | Lock_offer targets ->
+                  (* exercise the sabotage path: lock orange on someone *)
+                  (match targets with
+                   | (tid, tname) :: _ ->
+                     printf "[%s] first to submit! locking ORANGE on %s\n%!"
+                       name tname;
+                     send (Lock_color (tid, P.Tokens.accent))
+                   | [] -> ())
+                | Color_locked (who, c) ->
+                  printf "[%s] SABOTAGED: %s locked %s on me\n%!" name who
+                    (P.color_name c)
                 | Go_lobby -> ())
             in
             return ())));
