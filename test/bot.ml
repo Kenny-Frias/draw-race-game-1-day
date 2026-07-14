@@ -18,7 +18,6 @@ let play ~uri ~name ~is_starter ~n_bots =
                 (P.string_of_client_msg m)
             in
             send (Join name);
-            send (Set_ready true);
             let my_id = ref (-1) in
             let%bind () =
               Pipe.iter_without_pushback reader ~f:(fun s ->
@@ -28,12 +27,9 @@ let play ~uri ~name ~is_starter ~n_bots =
                   my_id := id
                 | Join_refused why -> printf "[%s] REFUSED: %s\n%!" name why
                 | Lobby (ps, secs) ->
-                  let ready =
-                    List.count ps ~f:(fun p ->
-                      match p.conn with P.Ready -> true | _ -> false)
-                  in
-                  printf "[%s] lobby: %d players, %d ready, round=%ds\n%!" name
-                    (List.length ps) ready secs;
+                  let ready = List.length ps in
+                  printf "[%s] lobby: %d players (all ready), round=%ds\n%!"
+                    name ready secs;
                   if is_starter && ready >= n_bots
                   then (
                     (* exercise the host round-time control: 90 -> 120s *)

@@ -68,8 +68,7 @@ type score_line =
 
 (* Client -> server *)
 type client_msg =
-  | Join of string (* requested name *)
-  | Set_ready of bool
+  | Join of string (* requested name; joining = ready *)
   | Set_round_time of int (* host only, seconds *)
   | Start_round (* host only *)
   | Submit of grid * int (* grid, seconds left at submit *)

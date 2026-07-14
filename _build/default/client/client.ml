@@ -62,16 +62,6 @@ let me () = List.find_opt (fun (p : P.player) -> p.id = !my_id) !players
 let i_am_host () =
   match me () with Some p -> p.is_host | None -> false
 
-let i_am_ready () =
-  match me () with
-  | Some { conn = P.Ready; _ } -> true
-  | _ -> false
-
-let ready_count () =
-  List.length
-    (List.filter (fun (p : P.player) -> match p.conn with P.Ready -> true | _ -> false)
-       !players)
-
 (* ---------- Websocket ---------- *)
 
 let ws : WebSockets.webSocket Js.t option ref = ref None
@@ -386,24 +376,23 @@ let render_lobby () =
     let sw = int_of_float (Draw.text_width ~size:16 s) + 20 in
     Draw.draw_border ~color:T.muted ~x:px ~y:sy ~w:sw ~h:30 ();
     Draw.text ~size:16 ~color:T.muted ~x:(px + 10) ~y:(sy + 6) s);
-  (* actions *)
+  (* actions: joining = ready, so the host just starts when 2+ are in *)
   let byy = T.win_h - 80 in
-  let can_start = i_am_host () && ready_count () >= P.min_players in
-  let w1 =
-    button ~x:px ~y:byy ~enabled:can_start "START ROUND" (fun () ->
-      send Start_round)
+  let bw' =
+    int_of_float (Draw.text_width ~size:20 ~bold:true "START ROUND") + 44
   in
-  Draw.text ~size:16 ~color:T.muted ~x:(px + w1 + 16) ~y:(byy + 12)
-    "host only · needs 2+ ready";
-  if i_am_ready ()
-  then
+  let bx' = (T.win_w - bw') / 2 in
+  if i_am_host ()
+  then (
+    let can_start = List.length !players >= P.min_players in
     ignore
-      (button ~fill:T.disabled ~text_color:T.ink ~x:(T.win_w - px - 150) ~y:byy
-         "UNREADY" (fun () -> send (Set_ready false)))
+      (button ~x:bx' ~y:byy ~enabled:can_start "START ROUND" (fun () ->
+         send Start_round));
+    Draw.text ~size:14 ~color:T.muted ~align:`Center ~x:(T.win_w / 2)
+      ~y:(byy + 48) "starts for everyone · needs 2+ players")
   else
-    ignore
-      (button ~fill:T.accent2 ~x:(T.win_w - px - 160) ~y:byy "READY UP"
-         (fun () -> send (Set_ready true)))
+    Draw.text ~size:17 ~color:T.muted ~align:`Center ~x:(T.win_w / 2)
+      ~y:(byy + 12) "waiting for the host to start the round…"
 
 let render_reveal word deadline =
   let cx = T.win_w / 2 in

@@ -159,10 +159,8 @@ let check_drawing_done () =
   | _ -> ()
 
 let start_round () =
-  let ready =
-    List.filter !clients ~f:(fun c ->
-      match c.player.conn with P.Ready -> true | P.Connecting -> false)
-  in
+  (* everyone connected plays: joining the lobby is being ready *)
+  let ready = !clients in
   if List.length ready >= P.min_players
   then (
     incr round_token;
@@ -193,9 +191,6 @@ let start_round () =
 let handle_msg (c : client) (msg : P.client_msg) =
   match msg with
   | Join _ -> () (* only valid as first message *)
-  | Set_ready r ->
-    c.player <- { c.player with conn = (if r then P.Ready else P.Connecting) };
-    broadcast_lobby ()
   | Set_round_time secs ->
     (match !phase with
      | Lobby when c.player.is_host ->
@@ -260,7 +255,7 @@ let serve_client reader writer =
        incr next_id;
        let is_host = not (List.exists !clients ~f:(fun c -> c.player.is_host)) in
        let c =
-         { player = { P.id; name; is_host; conn = P.Connecting }; send = writer }
+         { player = { P.id; name; is_host; conn = P.Ready }; send = writer }
        in
        clients := !clients @ [ c ];
        send_to c (Joined id);
